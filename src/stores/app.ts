@@ -139,10 +139,12 @@ async function toggleAutostart(enabled: boolean) {
   }
 }
 
-/** 挂载时调用：取初始状态并订阅后端推送 */
+/** 挂载时调用：先订阅后端推送，再取初始状态。
+ *
+ * 顺序很重要 —— 热键线程注册完会立刻推一次 pin://changed 用来上报
+ * 「热键是否生效」。如果先取快照再订阅，这一条就会丢，界面会显示错误的
+ * 热键状态，直到下一次轮询才自愈。 */
 async function init() {
-  await refresh();
-
   await api.onPinChanged(() => {
     void refreshSnapshot();
   });
@@ -150,6 +152,8 @@ async function init() {
   await api.onPinError((p) => {
     state.error = p.message;
   });
+
+  await refresh();
 }
 
 export function useAppStore() {

@@ -98,8 +98,8 @@ function onCopyPath() {
       <div class="group__row">
         <span class="mono about__ver">v{{ version }}</span>
         <span class="group__note">
-          置顶状态不写入磁盘 —— 窗口句柄重启后即失效。被本程序置顶的窗口若在
-          退出时仍处于置顶，重新运行后点「全部取消」即可清除。
+          置顶状态不写入磁盘 —— 窗口句柄重启后即失效。正常退出时程序会自动取消
+          全部置顶；若程序异常结束留下了残留，重新运行后点一次「全部取消」即可清除。
         </span>
       </div>
     </div>

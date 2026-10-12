@@ -1,24 +1,51 @@
-//! 最小骨架 —— 仅用于验证离线构建链路可用。
-//! 后续步骤会逐步替换为完整实现。
+//! 窗口置顶助手 —— 装配层。
+//!
+//! 沿用了本机既有 Tauri 项目的骨架约定（见 menstruation/src/lib.rs）：
+//! 配置文件里主窗口 `create: false`，在这里手动创建，以便注入 WebView2 的
+//! 数据目录（便携版零残留）。
 
+mod autostart;
+mod commands;
+mod error;
+mod events;
+mod hotkey;
+mod pin;
 mod portable;
+mod state;
+mod tray;
+mod winapi;
 
 use tauri::{Manager, WebviewWindowBuilder};
 
+use crate::state::AppState;
+
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        // 单实例：第二次启动时不新开进程，而是把已有窗口唤到前台
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
+            tray::show_main(app);
         }))
+        .invoke_handler(tauri::generate_handler![
+            commands::list_windows,
+            commands::toggle_pin,
+            commands::unpin_all,
+            commands::get_snapshot,
+            commands::set_autostart,
+            commands::open_data_dir,
+            commands::hide_to_tray,
+            commands::quit_app,
+        ])
         .setup(|app| {
+            // ── 1) 便携数据目录（必须在创建窗口之前完成）──────────────────
             let paths = portable::resolve()?;
             std::fs::create_dir_all(&paths.data_dir)?;
 
-            let cache_dir = paths.data_dir.join("webview");
+            app.manage(AppState::new(paths));
+
+            // ── 2) 手动创建主窗口，并把 WebView2 缓存也放进 data\ ────────
+            let cache_dir = app
+                .state::<AppState>()
+                .webview_cache_dir();
             std::fs::create_dir_all(&cache_dir)?;
 
             let window_config = app
@@ -34,8 +61,34 @@ pub fn run() {
                 .data_directory(cache_dir);
             builder.build()?;
 
+            // ── 3) 托盘 ─────────────────────────────────────────────────
+            tray::setup(app)?;
+
+            // ── 4) 热键线程 + 重断言定时器 ───────────────────────────────
+            let handle = hotkey::spawn(app.handle().clone());
+            app.state::<AppState>().set_hotkey(handle);
+
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .on_window_event(|window, event| {
+            // 关闭窗口 = 收进托盘。本程序的价值就在于后台持续守护置顶，
+            // 直接退出会让这个工具失去意义；真正退出走托盘菜单或设置页。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
         .expect("启动窗口置顶助手失败");
+
+    app.run(|app, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(state) = app.try_state::<AppState>() {
+                // 退出后没人再维护置顶，留着只会让那些窗口一直赖在最上层。
+                // 正常退出时恢复现场；异常崩溃时留下的残留，重开点「全部取消」即可清掉。
+                state.pins.unpin_all();
+                state.stop_hotkey();
+            }
+        }
+    });
 }

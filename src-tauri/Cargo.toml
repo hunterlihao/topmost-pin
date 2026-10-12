@@ -18,20 +18,26 @@ tauri-build = { version = "2", features = [] }
 # 而该 crate 不在本机离线缓存中。托盘图标改用 app.default_window_icon()。
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
-tauri-plugin-autostart = "2"
 
-# Win32 直调。本机 cargo 无法联网，只能用已缓存且已在本机 Cargo.lock 中解析过的版本。
-# windows-sys 0.61.2 已在 menstruation 的锁文件中，故加入依赖树零成本。
-# 注意：tauri-plugin-global-shortcut / global-hotkey 未在离线缓存中，因此全局热键
-# 一律走 RegisterHotKey 直调（见 src/hotkey.rs），不得引入该插件。
-[dependencies.windows-sys]
-version = "0.61"
-features = [
+# 开机自启刻意不用 tauri-plugin-autostart：它依赖 auto-launch -> async-broadcast，
+# 而 async-broadcast 0.7.2 不在本机离线缓存中，离线解析会直接失败。
+# 改用 winreg 直接写 HKCU\Software\Microsoft\Windows\CurrentVersion\Run —— 十几行代码，零新增风险。
+winreg = "0.55"
+
+# Win32 直调。本机 cargo 无法联网，只能用已缓存且已在既有项目 Cargo.lock 中解析过的版本。
+#
+# ★ 必须写成内联表：若写成 [dependencies.windows-sys] 子表，TOML 会把后续所有
+#   依赖项都归入该子表，serde / dirs 等将不再生效（这个坑已经踩过一次）。
+#
+# ★ 全局热键不走 tauri-plugin-global-shortcut（未缓存），直接调 RegisterHotKey；
+#   它和 MOD_* 常量都在 Win32::UI::Input::KeyboardAndMouse，不在 WindowsAndMessaging。
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Threading",
     "Win32_System_ProcessStatus",
-]
+] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
