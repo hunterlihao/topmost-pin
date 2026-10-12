@@ -52,7 +52,7 @@ onUnmounted(() => {
     <div class="band__text">
       <p class="band__lead">未取得管理员权限</p>
       <p class="band__body">
-        浏览器、IDE、资源管理器这类窗口无法置顶 —— Windows 不允许普通权限的进程改变管理员窗口的层级。重启会取消当前的全部置顶。
+        浏览器、IDE、资源管理器这类窗口无法置顶 —— 普通权限的进程动不了管理员窗口。重启会取消当前的全部置顶。
       </p>
       <p v-if="failed" class="band__fail">{{ failed }}</p>
       <p v-else-if="busy" class="band__fail band__fail--quiet">
@@ -79,7 +79,7 @@ onUnmounted(() => {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: stretch;
   flex: none;
-  margin: 12px 16px 0;
+  margin: 12px 16px;
   border: 2px solid var(--ink);
   background: var(--paper);
 }

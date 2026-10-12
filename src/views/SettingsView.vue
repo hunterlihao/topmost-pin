@@ -161,7 +161,7 @@ async function onCopy(text: string, what: string) {
         <div class="row__main">
           <h2 class="row__title">运行权限</h2>
           <p class="row__desc">
-            本程序固定以管理员身份运行，不做成可关闭的开关。置顶受 Windows 完整性级别限制（UIPI）：普通权限进程无法操作「以管理员身份运行」的窗口，而浏览器、IDE、资源管理器往往正是这一类 —— 做成选项的话，默认那一侧在最需要它的场景下恰好用不了。
+            固定以管理员身份运行，不做成开关 —— 普通权限的进程动不了管理员窗口，而浏览器、IDE 往往正是这一类。
           </p>
         </div>
         <div class="row__control">
@@ -240,7 +240,7 @@ async function onCopy(text: string, what: string) {
         <div class="row__main">
           <h2 class="row__title">数据与状态</h2>
           <p class="row__desc">
-            设置项与置顶事件历史存在一个 SQLite 单文件里。置顶状态本身不写入磁盘 —— 它绑定的是窗口句柄，重启后即失效；正常退出会自动取消全部置顶，异常退出若留下残留，重新运行后点一次「全部取消」即可清除。
+            设置项与置顶事件存在一个 SQLite 单文件里。置顶状态不写入磁盘 —— 绑定窗口句柄，重启即失效，正常退出会自动取消全部置顶；异常退出的残留，重新运行后点一次「全部取消」即可清除。
           </p>
           <p class="row__meta mono">
             已记录 {{ s.snapshot?.pinEventCount ?? 0 }} 条置顶事件 ·
@@ -305,8 +305,14 @@ async function onCopy(text: string, what: string) {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px 24px;
-  padding: 16px 20px;
+  padding: 16px;
   border-bottom: 1px solid var(--rule);
+}
+
+/* 最后一行不画分隔线：页脚自己有一条 border-top，
+   两条挨在一起会变成一道 2px 的粗线。 */
+.rows > .row:last-child {
+  border-bottom: 0;
 }
 
 .row__main {
@@ -375,7 +381,7 @@ async function onCopy(text: string, what: string) {
   align-items: center;
   gap: 8px;
   flex: none;
-  padding: 12px 20px;
+  padding: 12px 16px;
   border-top: 1px solid var(--rule);
   background: var(--well);
 }

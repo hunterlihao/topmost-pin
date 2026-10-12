@@ -135,7 +135,7 @@ function onSearch(e: Event) {
   max-height: 46%;
   background: var(--ink);
   color: var(--on-ink);
-  /* 2px 的岸线：抬起来的那一层到纸面之间的硬边。
+  /* 2px 的水面线：抬起来的那一层到纸面之间的硬边。
      整个平面都是墨，所以这条线读起来是墨块的加厚下沿，而不是一条分隔线。 */
   border-bottom: 2px solid var(--ink);
 }
@@ -162,22 +162,25 @@ function onSearch(e: Event) {
   font-size: 12px;
 }
 
-/* 反相上下文里的小按钮：不能沿用纸面上的 .btn（白底黑字会很扎眼） */
+/* 反相上下文里的小按钮：不能沿用纸面上的 .btn（白底黑字会很扎眼）。
+   默认连边框都不给 —— 「全部取消」是台面上唯一会削弱内容的东西，
+   它不该比它管的那几行更显眼；悬停时才浮出来。 */
 .deck__clear {
   height: 22px;
   padding: 0 8px;
-  border-color: rgba(255, 255, 255, 0.32);
+  border-color: transparent;
   background: transparent;
-  color: var(--on-ink);
+  color: var(--on-ink-2);
   font-size: 11.5px;
 }
 .deck__clear:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.5);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: var(--on-ink);
 }
 .deck__clear:disabled {
   color: var(--on-ink-3);
-  border-color: var(--deck-line);
+  border-color: transparent;
 }
 
 .deck__rows {

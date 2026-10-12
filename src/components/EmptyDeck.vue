@@ -22,12 +22,19 @@ defineProps<{ keys: string[]; hotkeyActive: boolean }>();
   <div class="slot">
     <div class="slot__text">
       <p class="slot__lead">还没有置顶窗口</p>
-      <p v-if="hotkeyActive" class="slot__how">
-        指向任意窗口按下即可置顶，再按一次取消；也可以点窗口行左侧的图钉。
-      </p>
-      <p v-else class="slot__how">
-        热键被其它程序占用，暂时按不了；点窗口行左侧的图钉置顶，或到「设置」里换一个组合键。
-      </p>
+      <template v-if="hotkeyActive">
+        <!-- 分成两句、各占一行，而不是让一段长文案自己折行：
+             中文折行不认词，很容易把「也可以点」和「窗口行左侧的图钉」拆开。
+             换行位置本身也是排版的一部分，交给浏览器就丢了控制权。 -->
+        <p class="slot__how">指向任意窗口按下即可置顶，再按一次取消。</p>
+        <p class="slot__alt">也可以点窗口行左侧的图钉。</p>
+      </template>
+      <template v-else>
+        <p class="slot__how">热键被其它程序占用，暂时按不了。</p>
+        <p class="slot__alt">
+          可以点窗口行左侧的图钉，或到「设置」里换一个组合键。
+        </p>
+      </template>
     </div>
 
     <div v-if="hotkeyActive" class="slot__keys">
@@ -65,9 +72,14 @@ defineProps<{ keys: string[]; hotkeyActive: boolean }>();
 }
 .slot__how {
   margin: 0;
-  max-width: 46ch;
   color: var(--ink-2);
   font-size: 12.5px;
+  line-height: 1.6;
+}
+.slot__alt {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
   line-height: 1.6;
 }
 

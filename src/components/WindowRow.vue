@@ -81,10 +81,19 @@ const hwndHex = computed(
 </template>
 
 <style scoped>
-/* 两侧共用：图钉 | 标题（吃掉剩余宽度）| 数据块 */
+/* ── 两个平面共用同一套列 ────────────────────────────
+   台面和下层候选区用的是**同一个网格**：同样的左右留白、同样的列宽，
+   差别只有行高、字号和明度。
+
+   这不是为了省事。两个平面本来就是同一份窗口列表被 z 序切开的两半 ——
+   列一对齐，眼睛就可以竖着从台面扫到下层去比对；列不对齐的话，
+   它们看起来就成了两张互不相干的表。 */
 .row {
   display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
+  gap: 0 12px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--rule);
 }
 
@@ -109,17 +118,21 @@ const hwndHex = computed(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.row__proc {
+  width: 158px;
+}
+.row__class {
+  width: 166px;
+}
 .row__hwnd {
+  width: 92px;
   text-align: right;
 }
 
-/* ── 下层候选区 ───────────────────────────────────── */
+/* ── 下层候选区：纸面、宽松 ─────────────────────── */
 
 .row--surface {
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  gap: 0 12px;
   min-height: 44px;
-  padding: 0 16px;
   background: var(--paper);
   transition: background var(--dur) var(--ease);
 }
@@ -131,30 +144,21 @@ const hwndHex = computed(
   font-weight: 500;
 }
 .row--surface .row__proc {
-  width: 158px;
   font-size: 12px;
   color: var(--ink-2);
 }
-.row--surface .row__class {
-  width: 166px;
-  font-size: 11.5px;
-  color: var(--ink-3);
-}
+.row--surface .row__class,
 .row--surface .row__hwnd {
-  width: 92px;
   font-size: 11.5px;
   color: var(--ink-3);
 }
 
-/* ── 台面（已置顶）───────────────────────────────
+/* ── 台面（已置顶）：反相、紧凑 ──────────────────
    反相 = 抬升。整套设计唯一的强调手段：整个平面是一块墨，
    行与行的分隔是墨面上更深一档的线，而不是纸面上更浅一档的线。 */
 
 .row--deck {
-  grid-template-columns: 28px minmax(0, 1fr) auto;
-  gap: 0 10px;
   min-height: 38px;
-  padding: 0 14px;
   border-bottom-color: var(--deck-line);
   background: var(--ink);
   color: var(--on-ink);
@@ -168,17 +172,11 @@ const hwndHex = computed(
   font-weight: 600;
 }
 .row--deck .row__proc {
-  width: 150px;
   font-size: 11.5px;
   color: var(--on-ink-2);
 }
-.row--deck .row__class {
-  width: 150px;
-  font-size: 11px;
-  color: var(--on-ink-3);
-}
+.row--deck .row__class,
 .row--deck .row__hwnd {
-  width: 88px;
   font-size: 11px;
   color: var(--on-ink-3);
 }
@@ -216,39 +214,30 @@ const hwndHex = computed(
 
 /* ── 窄窗 ─────────────────────────────────────────
    类名最宽、也最不关键，先砍它；再窄就把数据块折到标题下方，
-   全程不出现横向滚动。 */
+   全程不出现横向滚动。两个平面同步收，断点保持一致。 */
 
 @media (max-width: 900px) {
   .row__class {
     display: none;
   }
-  .row--surface .row__proc {
+  .row__proc {
     width: 146px;
-  }
-  .row--deck .row__proc {
-    width: 140px;
   }
 }
 
 @media (max-width: 780px) {
-  .row--surface,
-  .row--deck {
-    grid-template-columns: 34px minmax(0, 1fr);
+  .row {
+    grid-template-columns: 30px minmax(0, 1fr);
     padding-top: 7px;
     padding-bottom: 7px;
     row-gap: 3px;
-  }
-  .row--deck {
-    grid-template-columns: 28px minmax(0, 1fr);
   }
   .row__data {
     grid-column: 2;
     gap: 0 12px;
   }
-  .row--surface .row__proc,
-  .row--deck .row__proc,
-  .row--surface .row__hwnd,
-  .row--deck .row__hwnd {
+  .row__proc,
+  .row__hwnd {
     width: auto;
   }
   .row__hwnd {

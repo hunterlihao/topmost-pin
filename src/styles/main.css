@@ -154,7 +154,9 @@ button {
     box-shadow var(--dur) var(--ease);
 }
 .input::placeholder {
-  color: var(--ink-4);
+  /* ink-4(#b9b9b9) 对纸面只有 1.96:1 —— 那是画字形描边用的档位，不是给文字用的。
+     占位符是用户要读的内容（「搜索窗口标题、进程名或类名」），得走 ink-3（4.6:1）。 */
+  color: var(--ink-3);
 }
 .input:focus {
   border-color: var(--ink);
@@ -183,7 +185,9 @@ button {
   line-height: 1;
 }
 .kbd-plus {
-  color: var(--ink-4);
+  /* 同理：键帽之间那个「+」是在表达组合关系，不是装饰。
+     1.96:1 的话三枚键帽看起来就成了三个孤立的键。 */
+  color: var(--ink-3);
   font-size: 10px;
   padding: 0 1px;
 }
