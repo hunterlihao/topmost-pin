@@ -46,6 +46,18 @@ impl AppState {
             .unwrap_or(false)
     }
 
+    /// **实际生效的**热键文案。
+    ///
+    /// 不是写死的常量 —— 候选热键是逐个尝试的，界面必须显示真正注册成功的那个，
+    /// 否则用户按提示去按键会发现没用（本机 Ctrl+Alt+P 就被占用了）。
+    pub fn hotkey_display(&self) -> String {
+        self.hotkey
+            .lock()
+            .as_ref()
+            .map(|h| h.display())
+            .unwrap_or_else(|| crate::hotkey::FALLBACK_HOTKEY.to_string())
+    }
+
     pub fn stop_hotkey(&self) {
         if let Some(h) = self.hotkey.lock().as_ref() {
             h.stop();

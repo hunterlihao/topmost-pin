@@ -9,7 +9,7 @@
 //! 句柄，只在真正调用 API 的那一刻转回 `HWND`。
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, HWND, LPARAM, POINT, ERROR_ACCESS_DENIED,
+    CloseHandle, GetLastError, SetLastError, HWND, LPARAM, POINT, ERROR_ACCESS_DENIED,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW,
@@ -189,6 +189,18 @@ pub fn enum_top_level_windows() -> Vec<RawWindow> {
     out
 }
 
+/// 光标位置（屏幕坐标）。仅用于日志与诊断。
+pub fn cursor_pos() -> Option<(i32, i32)> {
+    unsafe {
+        let mut pt = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut pt) == 0 {
+            None
+        } else {
+            Some((pt.x, pt.y))
+        }
+    }
+}
+
 /// 光标正下方的顶层窗口。
 ///
 /// `WindowFromPoint` 返回的是最深的子窗口（可能是某个按钮），
@@ -230,11 +242,15 @@ pub fn has_topmost_style(hwnd: HwndRaw) -> bool {
 
 /// 置顶 / 取消置顶。
 ///
-/// ★ 判定成败看返回值，不要看「有没有 errno」：win32 的约定是 BOOL 为 0 才算失败，
-/// 成功的调用完全可能留下一个陈旧的 GetLastError 值。这里先判 `ok == 0` 再取错误码。
+/// ★ 判定成败只看返回值，**不要**用「errno 是否非零」来判断：
+/// Win32 的约定是 BOOL 为 0 才算失败，而成功的调用完全可能在 last-error 里
+/// 留下一个陈旧值。反过来同样成立 —— 调用前必须 `SetLastError(0)` 清零，
+/// 否则一次「失败但没写错误码」的调用会让我们读到**上一个 API 留下的**错误码，
+/// 从而把一次普通失败误报成「管理员窗口」。这个坑本项目踩过。
 pub fn set_topmost(hwnd: HwndRaw, on: bool) -> Result<(), AppError> {
     unsafe {
         let insert_after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        SetLastError(0);
         let ok = SetWindowPos(
             to_hwnd(hwnd),
             insert_after,
@@ -246,6 +262,13 @@ pub fn set_topmost(hwnd: HwndRaw, on: bool) -> Result<(), AppError> {
         );
         if ok == 0 {
             let code = GetLastError();
+            crate::log::write(
+                "win32",
+                format!(
+                    "SetWindowPos 失败 hwnd=0x{hwnd:X} on={on} alive={} err={code}",
+                    is_alive(hwnd)
+                ),
+            );
             return Err(if code == ERROR_ACCESS_DENIED {
                 AppError::AccessDenied
             } else {

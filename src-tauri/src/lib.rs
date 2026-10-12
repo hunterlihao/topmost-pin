@@ -11,6 +11,7 @@ pub mod commands;
 pub mod error;
 pub mod events;
 pub mod hotkey;
+pub mod log;
 pub mod pin;
 pub mod portable;
 pub mod state;
@@ -41,6 +42,18 @@ pub fn run() {
             // ── 1) 便携数据目录（必须在创建窗口之前完成）──────────────────
             let paths = portable::resolve()?;
             std::fs::create_dir_all(&paths.data_dir)?;
+
+            // 日志要尽早可用：后面每一步失败都靠它留下线索
+            log::init(&paths.data_dir);
+            log::write(
+                "app",
+                format!(
+                    "启动 v{} portable={} data_dir={}",
+                    env!("CARGO_PKG_VERSION"),
+                    paths.portable,
+                    paths.data_dir.display()
+                ),
+            );
 
             app.manage(AppState::new(paths));
 

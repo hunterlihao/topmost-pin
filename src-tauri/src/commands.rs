@@ -5,7 +5,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::error::{AppError, AppResult};
-use crate::hotkey::HOTKEY_DISPLAY;
 use crate::state::AppState;
 use crate::winapi;
 
@@ -44,15 +43,18 @@ pub fn list_windows(state: State<'_, AppState>) -> Vec<WindowInfo> {
 #[tauri::command]
 pub fn toggle_pin(state: State<'_, AppState>, hwnd: isize) -> AppResult<bool> {
     if !winapi::is_candidate(hwnd) {
+        crate::log::write("cmd", format!("toggle_pin 拒绝 hwnd=0x{hwnd:X}：不是候选窗口"));
         return Err(AppError::WindowGone);
     }
     let title = winapi::title_of(hwnd);
+    crate::log::write("cmd", format!("toggle_pin（来自界面）hwnd=0x{hwnd:X} title=「{title}」"));
     state.pins.toggle(hwnd, &title)
 }
 
 /// 取消全部置顶，返回取消的数量
 #[tauri::command]
 pub fn unpin_all(state: State<'_, AppState>) -> usize {
+    crate::log::write("cmd", "unpin_all（来自界面）");
     state.pins.unpin_all()
 }
 
@@ -73,7 +75,7 @@ pub struct Snapshot {
 pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot {
     Snapshot {
         pinned: state.pins.ids(),
-        hotkey: HOTKEY_DISPLAY.to_string(),
+        hotkey: state.hotkey_display(),
         hotkey_active: state.hotkey_active(),
         autostart: crate::autostart::is_enabled(),
         portable: state.paths.portable,

@@ -94,12 +94,19 @@ impl PinManager {
         }
         self.ops.set_topmost(hwnd, true)?;
         self.inner.lock().insert(hwnd, title.to_string());
+        crate::log::write(
+            "pin",
+            format!("加入集合 hwnd=0x{hwnd:X} 共 {} 个 title=「{title}」", self.len()),
+        );
         Ok(())
     }
 
     /// 取消置顶。窗口已经不在了不算失败 —— 结果和用户想要的一致。
     pub fn unpin(&self, hwnd: HwndRaw) -> AppResult<()> {
         let existed = self.inner.lock().remove(&hwnd).is_some();
+        if existed {
+            crate::log::write("pin", format!("移出集合 hwnd=0x{hwnd:X}"));
+        }
         if existed && self.ops.is_alive(hwnd) {
             self.ops.set_topmost(hwnd, false)?;
         }

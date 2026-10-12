@@ -142,12 +142,17 @@ fn handle_menu(app: &AppHandle, id: &str) {
         "show" => show_main(app),
         "quit" => app.exit(0),
         "unpin_all" => {
+            crate::log::write("tray", "unpin_all（来自托盘菜单）");
             state.pins.unpin_all();
             events::emit_changed(app);
             refresh(app);
         }
         "pin_target" => {
             let target = (*state.last_foreground.lock()).filter(|h| winapi::is_candidate(*h));
+            crate::log::write(
+                "tray",
+                format!("pin_target（来自托盘菜单）目标={:?}", target.map(|h| format!("0x{h:X}"))),
+            );
             match target {
                 Some(hwnd) => {
                     let title = winapi::title_of(hwnd);
@@ -167,6 +172,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
                 let Ok(hwnd) = rest.parse::<isize>() else {
                     return;
                 };
+                crate::log::write("tray", format!("取消单个置顶（来自托盘菜单）hwnd=0x{hwnd:X}"));
                 if let Err(e) = state.pins.unpin(hwnd) {
                     events::emit_error(app, e.to_string());
                 }

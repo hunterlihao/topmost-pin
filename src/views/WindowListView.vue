@@ -62,11 +62,18 @@ function onSearch(e: Event) {
       </button>
     </div>
 
-    <!-- 一个窗口都没置顶时，把热键摆在这里 —— 它是最该被学会的那件事 -->
+    <!-- 一个窗口都没置顶时，把热键摆在这里 —— 它是最该被学会的那件事。
+         热键没注册上时改说清楚，不能提示一个按了没反应的键。 -->
     <p v-if="pinnedCount === 0 && !s.loading" class="hint">
-      还没有置顶窗口 —— 指向任意窗口按
-      <KeyCap :keys="hotkeyKeys" :off="!s.snapshot?.hotkeyActive" />
-      ，或点下方窗口行左侧的图钉。
+      <template v-if="s.snapshot?.hotkeyActive">
+        还没有置顶窗口 —— 指向任意窗口按
+        <KeyCap :keys="hotkeyKeys" />
+        ，或点下方窗口行左侧的图钉。
+      </template>
+      <template v-else>
+        还没有置顶窗口。热键被其它程序占用了，点下方窗口行左侧的图钉即可置顶
+        —— 也可以在「设置」里看当前状态。
+      </template>
     </p>
 
     <p v-if="s.loading" class="empty">正在读取窗口…</p>

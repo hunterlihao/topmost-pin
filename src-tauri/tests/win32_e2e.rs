@@ -12,8 +12,10 @@
 //! 需要真实桌面环境，因此标了 #[ignore]：
 //!     cargo test --features custom-protocol -- --ignored --nocapture
 
+use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use topmost_pin_lib::winapi;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -116,6 +118,21 @@ impl Drop for TestWindow {
             self.close();
         }
     }
+}
+
+/// 轮询等待标题匹配的可见顶层窗口出现
+fn wait_for_window(title: &str, timeout: Duration) -> Option<isize> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Some(w) = winapi::enum_top_level_windows()
+            .into_iter()
+            .find(|w| w.title.contains(title))
+        {
+            return Some(w.hwnd);
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    None
 }
 
 /// 枚举结果必须满足过滤契约：非空标题、不含本进程自己的窗口
@@ -242,4 +259,152 @@ fn reassert_drops_destroyed_window() {
 
     assert_eq!(m.reassert(), 1, "已销毁的窗口应被剔除");
     assert_eq!(m.len(), 0);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * 跨进程置顶
+ *
+ * 上面几个测试里，被置顶的窗口都属于**本测试进程** —— 而产品真正要做的是
+ * 操作**别的进程**的窗口。这两件事在 Windows 上并不等价（完整性级别、输入队列、
+ * DPI 感知都可能让跨进程的 SetWindowPos 被拒）。
+ *
+ * 所以这里必须真的开一个外部进程，去置顶它的窗口。
+ * ──────────────────────────────────────────────────────────────────────── */
+
+const CROSS_TITLE: &str = "TopMostPinCrossProcTarget";
+
+/// 起一个外部进程，显示一个 WinForms 窗口并存活 30 秒
+fn spawn_external_window() -> std::process::Child {
+    let script = format!(
+        "Add-Type -AssemblyName System.Windows.Forms; \
+         $f = New-Object System.Windows.Forms.Form; \
+         $f.Text = '{CROSS_TITLE}'; \
+         $f.Width = 420; $f.Height = 220; \
+         $f.Show(); \
+         $sw = [Diagnostics.Stopwatch]::StartNew(); \
+         while ($sw.Elapsed.TotalSeconds -lt 30) {{ \
+           [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 100 }}"
+    );
+    Command::new("pwsh")
+        .args(["-NoProfile", "-Command", &script])
+        .spawn()
+        .expect("无法启动外部窗口进程")
+}
+
+#[test]
+#[ignore = "需要真实桌面环境，用 --ignored 显式运行"]
+fn can_pin_a_window_owned_by_another_process() {
+    let mut child = spawn_external_window();
+
+    let result = std::panic::catch_unwind(|| {
+        let hwnd = wait_for_window(CROSS_TITLE, Duration::from_secs(25))
+            .expect("25 秒内没有等到外部进程的窗口");
+
+        assert!(
+            !winapi::is_own_window(hwnd),
+            "目标窗口应当属于外部进程"
+        );
+        assert!(winapi::is_candidate(hwnd), "外部窗口应当是候选");
+        assert!(!winapi::has_topmost_style(hwnd), "初始不应置顶");
+
+        winapi::set_topmost(hwnd, true).expect("跨进程置顶失败");
+        assert!(
+            winapi::has_topmost_style(hwnd),
+            "跨进程置顶后 WS_EX_TOPMOST 应置位"
+        );
+
+        winapi::set_topmost(hwnd, false).expect("跨进程取消置顶失败");
+        assert!(!winapi::has_topmost_style(hwnd), "跨进程取消后应清除");
+
+        // ── 同一个窗口，改从**子线程**操作 ───────────────────────────────
+        // 应用实际就是在自己的热键线程上调用 SetWindowPos 的，而不是主线程。
+        // 这一步用来排除「在线程上调用」这个变量。
+        let t = std::thread::spawn(move || {
+            winapi::set_topmost(hwnd, true)
+                .expect("子线程跨进程置顶失败");
+            let on = winapi::has_topmost_style(hwnd);
+            winapi::set_topmost(hwnd, false).expect("子线程取消置顶失败");
+            on
+        });
+        assert!(
+            t.join().expect("子线程 panic"),
+            "子线程跨进程置顶后 WS_EX_TOPMOST 应置位"
+        );
+        assert!(!winapi::has_topmost_style(hwnd), "子线程取消后应清除");
+    });
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+/// 试着置顶一个**完全在沙箱之外**的窗口（用户自己启动的程序）。
+///
+/// 这个测试的意义是**区分「产品有缺陷」和「测试环境不允许」**：
+/// 自动化环境（DSH）会把它的进程树放进一个 Job Object，并且进程可能运行在
+/// 受限的窗口站上。若连这个测试都拿不到权限，那么「置顶用户程序失败」就是
+/// 环境限制而不是代码问题。
+#[test]
+#[ignore = "需要真实桌面环境，用 --ignored 显式运行"]
+fn probe_pinning_a_window_outside_the_sandbox() {
+    // ★ 关键变量：先把自己声明成 PerMonitorV2。
+    //
+    // 实测对照：同一个目标窗口，DPI 感知的调用方（PowerShell 脚本，已声明
+    // PerMonitorV2）置顶成功；DPI 不感知的调用方（本测试进程，控制台程序
+    // 默认 Unaware）拿到 ERROR_ACCESS_DENIED。目标窗口属于 PerMonitorV2 进程。
+    // 这一步把「DPI 感知上下文不匹配」这个变量单独测出来。
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetProcessDpiAwarenessContext(value: isize) -> i32;
+    }
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+    let dpi_ok = unsafe { SetProcessDpiAwarenessContext(-4) } != 0;
+    eprintln!("声明 PerMonitorV2 DPI 感知：{}", if dpi_ok { "成功" } else { "失败" });
+
+    // 这些都是用户正常启动、不可能在自动化进程树里的程序
+    const OUTSIDE: &[&str] = &[
+        "QQ.exe",
+        "WeChat.exe",
+        "chrome.exe",
+        "msedge.exe",
+        "explorer.exe",
+        "Typora.exe",
+        "Code.exe",
+        "idea64.exe",
+    ];
+
+    let mut tested = 0;
+    let mut ok_count = 0;
+    for w in winapi::enum_top_level_windows() {
+        let name = winapi::process_name(w.pid);
+        if !OUTSIDE.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        if tested >= 8 {
+            break;
+        }
+        tested += 1;
+
+        let before = winapi::has_topmost_style(w.hwnd);
+        let r = winapi::set_topmost(w.hwnd, true);
+        let after = winapi::has_topmost_style(w.hwnd);
+        match &r {
+            Ok(()) => {
+                ok_count += 1;
+                eprintln!("[OK  ] {name:<16} hwnd=0x{:X} topmost {before}->{after}", w.hwnd);
+                let _ = winapi::set_topmost(w.hwnd, false);
+            }
+            Err(e) => {
+                eprintln!("[FAIL] {name:<16} hwnd=0x{:X} before={before} after={after} -> {e}", w.hwnd);
+            }
+        }
+    }
+    if tested == 0 {
+        eprintln!("跳过：桌面上没有找到沙箱外的目标程序");
+    } else {
+        eprintln!("沙箱外窗口 {ok_count}/{tested} 成功（本测试是环境探针，不 panic）");
+    }
 }
