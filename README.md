@@ -11,6 +11,17 @@
 
 ---
 
+## 下载
+
+**[最新版本](https://github.com/hunterlihao/topmost-pin/releases/latest)** ——
+`topmost-pin-v1.0.0-portable-win-x64.zip`，解压后双击 `窗口置顶助手.exe`。
+
+> **exe 没有代码签名**，首次运行会被 Windows SmartScreen 拦一下：
+> 点「更多信息」→「仍要运行」即可。不放心可以先核对 Release 页上公布的 SHA256，
+> 或者干脆从源码自己构建（见下面的「快速开始」）。
+
+---
+
 ## 技术栈
 
 **Tauri v2 + Rust + Vue 3 + Vite**，单 exe 便携版，零安装、零运行时依赖（除系统自带的 WebView2）。
