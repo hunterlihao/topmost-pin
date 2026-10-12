@@ -78,6 +78,9 @@ const STATES = {
   many: { windows: pinnedFirst(9), admin: true },
   allpinned: { windows: pinnedFirst(WINDOWS.length), admin: true },
   noadmin: { windows: pinnedFirst(2), admin: false },
+  // 热键被别的程序占用了。这一版改过这里：报头原来会把键帽渲染成**空白**，
+  // 现在换成一个明确的反相标记；空台面也要跟着换文案，不能提示一个按了没反应的键。
+  nohotkey: { windows: pinnedFirst(0), admin: true, hotkey: false },
   nomatch: { windows: pinnedFirst(2), admin: true, drive: "nomatch" },
   settings: { windows: pinnedFirst(3), admin: true, drive: "settings" },
   "settings-noadmin": { windows: pinnedFirst(2), admin: false, drive: "settings" },
@@ -90,7 +93,8 @@ const html = (state) => {
   const snapshot = {
     pinned: preset.windows.filter((w) => w.pinned).map((w) => w.hwnd),
     hotkey: "Ctrl+Shift+P",
-    hotkeyActive: true,
+    // preset.hotkey === false 表示「这个组合被别的程序占用了」
+    hotkeyActive: preset.hotkey !== false,
     autostart: true,
     isAdmin: preset.admin,
     portable: true,
@@ -99,9 +103,6 @@ const html = (state) => {
     pinEventCount: 128,
     version: "1.0.0",
   };
-
-  // 热键不可用的那一档单独造一个，用来检查报头不再是空白键帽
-  if (state === "nohotkey") snapshot.hotkeyActive = false;
 
   return `<!doctype html>
 <html lang="zh-CN">

@@ -21,6 +21,7 @@ $jobs = @(
     @{ State = "many";             W = 940; H = 680 },
     @{ State = "allpinned";        W = 940; H = 680 },
     @{ State = "noadmin";          W = 940; H = 680 },
+    @{ State = "nohotkey";         W = 940; H = 680 },
     @{ State = "nomatch";          W = 940; H = 680 },
     @{ State = "settings";         W = 940; H = 680 },
     @{ State = "settings-noadmin"; W = 940; H = 680 },
