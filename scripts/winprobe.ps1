@@ -114,10 +114,16 @@ if ($PSCmdlet.ParameterSetName -eq 'List') {
     exit 0
 }
 
-$matched = @($windows | Where-Object { $_.Title -like "*$Title*" })
+# 标题里可能含 [ ] * ? 这些通配符（例如「[WIP] 记事本」），
+# 不转义的话 -like 会把它们当字符集，结果是匹配到别的窗口、或者一个都匹配不到。
+$pattern = '*' + [System.Management.Automation.WildcardPattern]::Escape($Title) + '*'
+$matched = @($windows | Where-Object { $_.Title -like $pattern })
 
 if ($matched.Count -eq 0) {
-    Write-Error "没有找到标题包含「$Title」的可见窗口。"
+    # ★ 必须 -ErrorAction Continue：脚本开头设了 $ErrorActionPreference='Stop'，
+    # 裸 Write-Error 在那是**终止性**错误，下面的 exit 1 根本执行不到，
+    # 调用方（& ./winprobe.ps1）拿到的是终止性异常而不是退出码。
+    Write-Error "没有找到标题包含「$Title」的可见窗口。" -ErrorAction Continue
     exit 1
 }
 
@@ -130,7 +136,7 @@ foreach ($w in $matched) {
 }
 
 if ($wrong.Count -gt 0) {
-    Write-Error ("断言失败：期望 {0}，但有 {1}/{2} 个匹配窗口不满足。" -f $Expect, $wrong.Count, $matched.Count)
+    Write-Error ("断言失败：期望 {0}，但有 {1}/{2} 个匹配窗口不满足。" -f $Expect, $wrong.Count, $matched.Count) -ErrorAction Continue
     exit 1
 }
 

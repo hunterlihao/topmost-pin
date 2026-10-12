@@ -15,7 +15,7 @@
 //! ERROR_HOTKEY_ALREADY_REGISTERED）。固定单一组合在装了同类工具的机器上会直接
 //! 失效，所以依次尝试候选组合，用第一个成功的，并把**实际生效的那个**上报界面。
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::thread;
@@ -216,8 +216,29 @@ fn describe_register_error(err: u32) -> String {
 
 /* ── 热键线程 ─────────────────────────────────────────────────────────── */
 
-/// 换键请求：新的组合串 + 回执通道
-type RebindRequest = (String, SyncSender<Result<String, String>>);
+/// 换键请求：序号 + 新的组合串 + 回执通道
+type RebindRequest = (u64, String, SyncSender<Result<String, String>>);
+
+/// 换键请求的序号。用来区分「槽里还是我那条」与「已经被后来的请求取代」——
+/// 无条件清槽会把别人正在等的请求一起抹掉。
+static REBIND_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// 进程正在退出。
+///
+/// 置上之后热键线程不再做任何会改变置顶状态、或者会去惊动界面的事。
+/// ★ 退出流程必须靠它：那个 1Hz 的重断言定时器如果还在跑，就会把 `unpin_all`
+/// 刚取消的窗口重新顶回去，而进程马上就要消失 —— 那个窗口会**永久**留在最上层，
+/// 而下次启动的集合是空的、根本不知道它的存在。
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// 通知热键线程：进程要退出了，别再动置顶状态
+pub fn begin_shutdown() {
+    SHUTTING_DOWN.store(true, Ordering::SeqCst);
+}
+
+fn shutting_down() -> bool {
+    SHUTTING_DOWN.load(Ordering::SeqCst)
+}
 
 pub struct HotkeyHandle {
     thread_id: AtomicU32,
@@ -278,11 +299,12 @@ impl HotkeyHandle {
             return Err(AppError::msg("热键线程尚未就绪，稍后再试"));
         }
 
+        let token = REBIND_SEQ.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = std::sync::mpsc::sync_channel::<Result<String, String>>(1);
-        *self.pending.lock() = Some((combo, tx));
+        *self.pending.lock() = Some((token, combo, tx));
 
         if unsafe { PostThreadMessageW(tid, WM_APP_REKEY, 0, 0) } == 0 {
-            self.pending.lock().take();
+            self.recycle(token);
             return Err(AppError::msg("无法通知热键线程"));
         }
 
@@ -290,10 +312,28 @@ impl HotkeyHandle {
             Ok(Ok(label)) => Ok(label),
             Ok(Err(e)) => Err(AppError::msg(e)),
             Err(_) => {
-                // 线程没回应就把请求撤掉，免得它稍后突然生效
-                self.pending.lock().take();
-                Err(AppError::msg("热键线程没有响应"))
+                // ★ 只回收**自己那一条**。
+                //
+                // 无条件 take 会连后到的请求一起抹掉：两条请求重叠时，先到的那条
+                // 超时后把后到的那条也清空，于是两个调用方都收到「线程没有响应」，
+                // 而用户真正想设的那个组合根本没生效。
+                if self.recycle(token) {
+                    Err(AppError::msg("热键线程没有响应"))
+                } else {
+                    Err(AppError::msg("换键请求被后一次请求取代，请重试"))
+                }
             }
+        }
+    }
+
+    /// 只有当槽里还是 `token` 这一条时才回收它，返回是否真的回收了
+    fn recycle(&self, token: u64) -> bool {
+        let mut slot = self.pending.lock();
+        if slot.as_ref().is_some_and(|(t, _, _)| *t == token) {
+            slot.take();
+            true
+        } else {
+            false
         }
     }
 
@@ -312,10 +352,18 @@ impl HotkeyHandle {
 pub fn spawn(app: AppHandle) -> Arc<HotkeyHandle> {
     let handle = Arc::new(HotkeyHandle::new());
     let worker = handle.clone();
-    thread::Builder::new()
+    if let Err(e) = thread::Builder::new()
         .name("topmost-pin-hotkey".to_string())
         .spawn(move || run(app, worker))
-        .expect("无法启动热键线程");
+    {
+        // 线程起不来不该让整个程序死掉（界面仍可正常置顶，只是没有全局热键
+        // 与重断言），但**必须留下记录**：release 是 GUI 子系统，没有控制台，
+        // 不写日志的话这就是一次查不出原因的「双击没反应」。
+        log::write(
+            "hotkey",
+            format!("热键线程启动失败：{e}，全局热键与重断言将不可用"),
+        );
+    }
     handle
 }
 
@@ -324,29 +372,28 @@ fn run(app: AppHandle, handle: Arc<HotkeyHandle>) {
     handle.thread_id.store(tid, Ordering::SeqCst);
     log::write("hotkey", format!("线程启动 tid={tid}"));
 
-    // 优先尝试「上次实际生效的那个」（可能是用户在设置里改过的），再退到候选列表。
-    // 否则机器上装了别的软件时可用组合一变，热键就会莫名其妙换掉，
-    // 用户的肌肉记忆直接失效。
-    let preferred = app
-        .try_state::<AppState>()
-        .and_then(|s| s.db.get_setting(crate::db::keys::HOTKEY));
+    // 启动时的候选顺序，优先级从高到低：
+    //   1. 用户明确设定过的（在设置页改过，或 --set-hotkey 指定）
+    //   2. 上次实际生效的（可能是自动挑的候选）—— 用来保持稳定，
+    //      否则机器上可用组合一变，每次启动都会换一个，用户记不住
+    //   3. 内置候选列表
+    let (explicit, last) = match app.try_state::<AppState>() {
+        Some(s) => (
+            s.db.get_setting(crate::db::keys::HOTKEY),
+            s.db.get_setting(crate::db::keys::HOTKEY_LAST),
+        ),
+        None => (None, None),
+    };
 
     let mut order: Vec<Combo> = Vec::new();
-    if let Some(p) = preferred.as_deref() {
-        match parse(p) {
-            Ok(c) => {
-                log::write("hotkey", format!("按上次生效的设置优先尝试 {p}"));
-                order.push(c);
-            }
-            Err(e) => log::write("hotkey", format!("数据库里的热键「{p}」解析不了：{e}")),
-        }
+    if let Some(v) = explicit.as_deref() {
+        push_candidate(&mut order, v, "优先尝试用户设定的热键");
+    }
+    if let Some(v) = last.as_deref() {
+        push_candidate(&mut order, v, "其次尝试上次生效的热键");
     }
     for label in CANDIDATES {
-        match parse(label) {
-            Ok(c) if !order.contains(&c) => order.push(c),
-            Ok(_) => {} // 与首选重复
-            Err(e) => log::write("hotkey", format!("候选 {label} 配置有误：{e}")),
-        }
+        push_candidate(&mut order, label, "候选");
     }
 
     let mut current: Option<Combo> = None;
@@ -365,7 +412,9 @@ fn run(app: AppHandle, handle: Arc<HotkeyHandle>) {
     match current.as_ref() {
         Some(c) => {
             log::write("hotkey", format!("注册成功：{}", c.label));
-            persist(&app, &c.label);
+            // ★ 只记「实际生效的」。**不能**顺手写 keys::HOTKEY —— 那会把
+            //   用户明确设过的组合，因为一次临时冲突就覆盖成自动挑的候选。
+            mark_effective(&app, &c.label);
         }
         None => log::write("hotkey", "全部候选都被占用，热键不可用"),
     }
@@ -376,10 +425,14 @@ fn run(app: AppHandle, handle: Arc<HotkeyHandle>) {
     events::emit_changed(&app);
 
     // 定时器与热键无关：界面点出来的置顶同样需要被守护，所以无条件启用
-    unsafe {
-        SetTimer(std::ptr::null_mut(), TIMER_ID, REASSERT_MS, None);
+    let timer = unsafe { SetTimer(std::ptr::null_mut(), TIMER_ID, REASSERT_MS, None) };
+    if timer == 0 {
+        // 不能无条件写「已启动」：那样日志会显示一切正常，而实际上被别的程序
+        // 抢走的置顶从此不会被补回，用户只能看到「有时候失效」。
+        log::write("hotkey", format!("重断言定时器启动失败（err={}）", last_error()));
+    } else {
+        log::write("hotkey", "重断言定时器已启动（1s）");
     }
-    log::write("hotkey", "重断言定时器已启动（1s）");
 
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     // GetMessageW: >0 有消息，0 收到 WM_QUIT，-1 出错 —— 后两者都该退出
@@ -396,7 +449,7 @@ fn run(app: AppHandle, handle: Arc<HotkeyHandle>) {
             }
             WM_TIMER => on_tick(&app),
             WM_APP_REKEY => {
-                let Some((combo, reply)) = handle.pending.lock().take() else {
+                let Some((_, combo, reply)) = handle.pending.lock().take() else {
                     continue;
                 };
                 let result = rebind(&app, &mut current, &combo);
@@ -415,11 +468,38 @@ fn run(app: AppHandle, handle: Arc<HotkeyHandle>) {
     if current.is_some() {
         unregister(HOTKEY_ID);
     }
+    // ★ 必须复位：线程 ID 会被系统复用，留着旧值的话后续的 `stop()` / `rebind()`
+    // 会把消息投给同进程里一个**无关**的线程（若它有消息循环，一个 WM_QUIT
+    // 就能把它直接干掉）。
+    handle.thread_id.store(0, Ordering::SeqCst);
 }
 
-fn persist(app: &AppHandle, label: &str) {
+/// 往候选顺序里加一条。解析不了就跳过并记下来 —— 尤其能暴露数据库里存了脏值。
+fn push_candidate(order: &mut Vec<Combo>, label: &str, source: &str) {
+    match parse(label) {
+        // 用户设的恰好就是某个候选时会出现重复
+        Ok(c) if order.contains(&c) => {}
+        Ok(c) => {
+            log::write("hotkey", format!("{source}：{label}"));
+            order.push(c);
+        }
+        Err(e) => log::write("hotkey", format!("{source}「{label}」解析失败：{e}，跳过")),
+    }
+}
+
+/// 记录「这次实际生效的热键」。每次注册成功都写。
+fn mark_effective(app: &AppHandle, label: &str) {
+    save(app, crate::db::keys::HOTKEY_LAST, label);
+}
+
+/// 记录「用户明确设定的热键」。**只在用户主动改键时**写。
+fn mark_user_choice(app: &AppHandle, label: &str) {
+    save(app, crate::db::keys::HOTKEY, label);
+}
+
+fn save(app: &AppHandle, key: &str, label: &str) {
     if let Some(state) = app.try_state::<AppState>() {
-        if let Err(e) = state.db.set_setting(crate::db::keys::HOTKEY, label) {
+        if let Err(e) = state.db.set_setting(key, label) {
             log::write("hotkey", format!("保存热键设置失败：{e}"));
         }
     }
@@ -432,9 +512,10 @@ fn persist(app: &AppHandle, label: &str) {
 fn rebind(app: &AppHandle, current: &mut Option<Combo>, input: &str) -> Result<String, String> {
     let next = parse(input).map_err(|e| e.to_string())?;
 
-    match swap(current, &next, |label| persist(app, label)) {
+    match swap(current, &next, |label| mark_user_choice(app, label)) {
         Ok(()) => {
             log::write("hotkey", format!("热键已改为 {}", next.label));
+            mark_effective(app, &next.label);
             Ok(next.label)
         }
         Err(err) => {
@@ -482,6 +563,9 @@ fn swap(current: &mut Option<Combo>, next: &Combo, save: impl FnOnce(&str)) -> R
 
 /// 热键按下：切换「光标下窗口」的置顶状态
 fn on_hotkey(app: &AppHandle) {
+    if shutting_down() {
+        return; // 正在退出，别再改置顶状态
+    }
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
@@ -540,6 +624,11 @@ fn on_hotkey(app: &AppHandle) {
 
 /// 定时器：记录前台窗口 + 重断言 + 剔除已销毁的窗口
 fn on_tick(app: &AppHandle) {
+    // ★ 退出时先停手。否则这一轮重断言会把 unpin_all 刚取消的窗口重新顶回去，
+    // 而进程马上就要消失 —— 那个窗口会永久留在最上层。
+    if shutting_down() {
+        return;
+    }
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
@@ -632,6 +721,49 @@ mod tests {
 
     /* ── 换键（真注册真抢占）─────────────────────────────────────────── */
 
+    /// 探测用的独立 ID。不能借用 HOTKEY_ID —— 同一个 ID 再次注册会**替换**掉
+    /// 已有的那条，把测试正要用的注册顶掉。
+    const PROBE_ID: i32 = 0x7FFE;
+
+    /// 测试用的冷门组合池。
+    ///
+    /// ★ 这几条测试会**真的**往系统里注册全局热键，所以：
+    ///   · 不能写死一个组合 —— 开发机上可能正跑着本程序（它自己占着一个），
+    ///     也可能有别的软件占着。挑 F13~F18 是因为本程序自己用的是
+    ///     Ctrl+Alt+P 系与用户设定的组合，几乎不可能撞上；
+    ///   · 每个测试用**自己独占**的一段，不能共用。cargo test 默认并行跑，
+    ///     共用的话两个测试会互相把对方刚探测到的空闲组合抢走，
+    ///     表现为随机的「构造不出冲突」。
+    const POOL_A: &[&str] = &["Ctrl+Alt+Shift+F13", "Ctrl+Alt+Shift+F14"];
+    const POOL_B: &[&str] = &["Ctrl+Alt+Shift+F15", "Ctrl+Alt+Shift+F16"];
+    const POOL_C: &[&str] = &["Ctrl+Alt+Shift+F17", "Ctrl+Alt+Shift+F18"];
+
+    fn combo(label: &str) -> Combo {
+        parse(label).unwrap_or_else(|e| panic!("{label} 解析失败：{e}"))
+    }
+
+    /// 在给定的候选池里找一个当前空闲的组合（试完立刻放掉）。`used` 里的排除。
+    ///
+    /// 池子全被占用时给出明确原因，而不是让后面的断言以「xx 被占用」这种
+    /// 看起来像产品缺陷的形式失败。
+    fn free_or_skip(pool: &[&str], used: &[Combo]) -> Combo {
+        for label in pool {
+            let c = combo(label);
+            if used.contains(&c) {
+                continue;
+            }
+            let ok = register(PROBE_ID, &c);
+            if ok {
+                unregister(PROBE_ID);
+                return c;
+            }
+        }
+        panic!(
+            "候选池（{}）当前全被占用，这条换键测试的前提不成立",
+            pool.join(" / ")
+        );
+    }
+
     /// 在**另一个线程**上占住某个组合，模拟「这个热键已经被别的程序注册了」。
     ///
     /// 必须换线程：`RegisterHotKey` 的冲突判定是跨线程的，同一线程换个 ID
@@ -695,24 +827,18 @@ mod tests {
         }
     }
 
-    fn combo(label: &str) -> Combo {
-        parse(label).unwrap_or_else(|e| panic!("{label} 解析失败：{e}"))
-    }
-
     #[test]
     fn swap_registers_the_new_combo_and_saves_it() {
-        let mut current = Some(combo("Ctrl+Alt+Shift+F22"));
-        assert!(register(HOTKEY_ID, current.as_ref().unwrap()));
+        let old = free_or_skip(POOL_A, &[]);
+        let next = free_or_skip(POOL_A, std::slice::from_ref(&old));
+        assert!(register(HOTKEY_ID, &old), "占住旧组合");
 
-        let next = combo("Ctrl+Alt+Shift+F23");
+        let mut current = Some(old);
         let mut saved = String::new();
         swap(&mut current, &next, |label| saved.push_str(label)).expect("换键应当成功");
 
-        assert_eq!(
-            current.as_ref().map(|c| c.label.as_str()),
-            Some("Ctrl+Alt+Shift+F23")
-        );
-        assert_eq!(saved, "Ctrl+Alt+Shift+F23", "成功时要落库");
+        assert_eq!(current.as_ref(), Some(&next), "current 应当换成新的那个");
+        assert_eq!(saved, next.label, "成功时要落库");
 
         unregister(HOTKEY_ID);
     }
@@ -723,24 +849,20 @@ mod tests {
     /// 处理错的后果是「试一次失败，热键整个没了」。
     #[test]
     fn swap_restores_the_previous_combo_when_the_new_one_is_taken() {
-        let taken = combo("Ctrl+Alt+Shift+F24");
+        let taken = free_or_skip(POOL_B, &[]);
         let blocker = Blocker::new(&taken);
         assert!(blocker.held, "构造不出冲突，这条测试就没有意义");
 
-        let old = combo("Ctrl+Alt+Shift+F21");
-        let mut current = Some(old.clone());
-        assert!(register(HOTKEY_ID, current.as_ref().unwrap()));
+        let old = free_or_skip(POOL_B, std::slice::from_ref(&taken));
+        assert!(register(HOTKEY_ID, &old), "占住旧组合");
 
+        let mut current = Some(old.clone());
         let mut saved = String::new();
         let err = swap(&mut current, &taken, |label| saved.push_str(label))
             .expect_err("被占用的组合不该注册成功");
 
         assert_eq!(err, ERROR_HOTKEY_ALREADY_REGISTERED);
-        assert_eq!(
-            current.as_ref().map(|c| c.label.as_str()),
-            Some("Ctrl+Alt+Shift+F21"),
-            "失败后 current 必须还是原来那个"
-        );
+        assert_eq!(current.as_ref(), Some(&old), "失败后 current 必须还是原来那个");
         assert!(saved.is_empty(), "失败时不该落库");
 
         // 「变量没变」不等于「系统里还占着」—— 换个线程去抢一下才算数
@@ -754,7 +876,7 @@ mod tests {
     /// 首次设置（原本没有热键）失败时，不该留下任何残留注册
     #[test]
     fn swap_leaves_nothing_when_first_attempt_is_taken() {
-        let taken = combo("Ctrl+Alt+Shift+F20");
+        let taken = free_or_skip(POOL_C, &[]);
         let blocker = Blocker::new(&taken);
         assert!(blocker.held, "构造不出冲突");
 

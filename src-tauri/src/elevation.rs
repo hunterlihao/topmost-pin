@@ -1,16 +1,19 @@
-//! 管理员权限：判断当前是否提权，以及**在运行时以另一种权限重启自己**。
+//! 管理员权限：判断当前是否提权，以及**在运行时以管理员身份重启自己**。
 //!
-//! 为什么需要「重启自己」：进程一旦启动，它的令牌就固定了，无法在运行中提权或降权。
-//! 所以「是否以管理员运行」这个开关只能靠重启进程来落实。
+//! 为什么需要「重启自己」：进程一旦启动，它的令牌就固定了，没法在运行中提权。
+//! 而置顶受 Windows 的 UIPI 限制 —— 非提权进程操作不了提权窗口的 `SetWindowPos`，
+//! 所以本程序固定以管理员运行，没提权成功时只能靠重启进程来落实。
 //!
-//! 两个方向的做法不同：
-//!   · 提权：`ShellExecuteW(..., "runas", ...)` —— 由系统弹出 UAC，用户同意后
-//!     以高完整性令牌启动新实例。
-//!   · 降权：**没有对应的 API**。这里走一个通行做法：让 `explorer.exe` 去启动它。
-//!     explorer 运行在标准用户的中等完整性级别上，它创建的子进程自然也是中等完整性。
+//! 做法：`ShellExecuteW(..., "runas", ...)` —— 由系统弹出 UAC，
+//! 用户同意后以高完整性令牌启动新实例。
 //!
-//! 重启的握手靠 `data\.relaunching` 标记文件（见 lib.rs），而不是命令行参数 ——
-//! 因为经 explorer 启动时无法可靠地传递参数，而环境变量在跨提权边界时也不保证保留。
+//! ★ 这里**曾经**还有一条「降权重启」的路径（让 explorer.exe 去启动它，因为
+//! explorer 运行在中等完整性级别、子进程自然也是）。后来权限改成固定管理员运行、
+//! 设置页的开关被删掉，那条分支就成了永远走不到的死代码，一并删除了。
+//!
+//! 重启的握手靠 `data\.relaunching` 标记文件，而不是命令行参数 ——
+//! 环境变量在跨提权边界时不保证保留。注意那个标记的判定规则见 lib.rs：
+//! 「标记在」还必须叠加「确实已提权」，否则一次中断的提权会让程序永久失去提权。
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::Security::{
@@ -24,6 +27,16 @@ use crate::winapi::{path_to_wide, to_wide};
 
 /// ShellExecuteW 的返回值小于等于 32 表示失败（这是它的历史约定）
 const SHELL_EXEC_SUCCESS_THRESHOLD: isize = 32;
+
+/// `ERROR_CANCELLED`。
+///
+/// ★ 这个必须单独排掉：`ShellExecuteW` 内部走的是 `ShellExecuteEx`，而后者在
+/// 用户取消 UAC 时返回 FALSE、`GetLastError()` 为 1223。**1223 大于 32** ——
+/// 万一哪条路径把它原样当返回值，就会被 `r > 32` 误判成「成功」：
+/// 于是记下「已发起提权重启」然后退出，而新实例根本不存在，程序凭空消失、
+/// 还留下一个 `.relaunching` 标记。多这一行判断，换掉一整类难查的故障。
+const ERROR_CANCELLED_CODE: isize = 1223;
+
 const SW_SHOWNORMAL: i32 = 1;
 
 /// 当前进程是否以管理员（高完整性）身份运行
@@ -49,6 +62,9 @@ pub fn is_elevated() -> bool {
 
 /// 把 ShellExecuteW 的返回值翻译成人话
 fn shell_result(r: isize, action: &str) -> AppResult<()> {
+    if r == ERROR_CANCELLED_CODE {
+        return Err(AppError::msg(format!("{action}被取消（UAC 未确认）")));
+    }
     if r > SHELL_EXEC_SUCCESS_THRESHOLD {
         return Ok(());
     }

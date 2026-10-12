@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
     CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect,
@@ -37,7 +37,7 @@ use windows_sys::Win32::UI::HiDpi::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-    GetMessageW, GetSystemMetrics, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage,
+    GetMessageW, GetSystemMetrics, IsWindow, LoadCursorW, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetTimer, ShowWindow, TranslateMessage, UnregisterClassW, MSG,
     WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
@@ -64,6 +64,10 @@ const THUD_MS: f32 = 240.0;
 const TEXT_START: f32 = 560.0; // 应用名浮现
 const TEXT_MS: f32 = 320.0;
 const ANIM_MS: f32 = 1120.0; // 进度线填满
+
+/// 动画播完后，收尾轮询的间隔。
+/// 那之后只剩一个「主界面好了没 / 超时了没」的判断，没必要继续 60fps。
+const HOLD_POLL_MS: u32 = 100;
 
 /// 动画播完后最多再等主界面多久。超时也必须收尾，否则用户会一直看着动画。
 pub const HOLD_MAX_MS: u64 = 6000;
@@ -96,13 +100,17 @@ const PIN_SHAPE: &[(f32, f32)] = &[
     (0.263, 0.300),
 ];
 
+/// 只保留真正被读写的状态。
+///
+/// ★ 这里**没有**「主界面是否就绪」的标志：收尾走的是 `destroy()` 直接投
+/// `WM_CLOSE`，比让动画线程轮询一个标志更直接。曾经加过一个 `main_ready`
+/// 原子量，但它从来没有人写 —— 只读不写的字段会让「等主界面就绪」这条分支
+/// 看起来存在、实际永远走不到，比没有更糟。
 #[derive(Default)]
 struct Shared {
     hwnd: AtomicIsize,
-    /// 主界面已经画好了，动画可以收尾
-    main_ready: AtomicBool,
-    /// 窗口已经销毁，避免重复收尾
-    closed: AtomicBool,
+    /// 动画已经播完，进入「等主界面」阶段（定时器已降频）
+    holding: AtomicBool,
 }
 
 fn shared() -> &'static Shared {
@@ -137,7 +145,9 @@ pub fn start() {
 /// 可从任意线程调用 —— 窗口属于它自己的线程，所以这里只投一个 `WM_CLOSE` 过去。
 pub fn destroy() {
     let hwnd = shared().hwnd.load(Ordering::SeqCst);
-    if hwnd != 0 {
+    // 投递前确认句柄仍然有效。句柄回收是真实存在的（见 WM_DESTROY 里的说明），
+    // 一个 IsWindow 换掉「给无关窗口投 WM_CLOSE」这种后果，很划算。
+    if hwnd != 0 && unsafe { IsWindow(hwnd as HWND) } != 0 {
         unsafe {
             PostMessageW(hwnd as HWND, WM_CLOSE, 0, 0);
         }
@@ -173,7 +183,10 @@ unsafe extern "system" fn wnd_proc(
             0
         }
         WM_DESTROY => {
-            shared().closed.store(true, Ordering::SeqCst);
+            // ★ 立刻清掉句柄：别的线程（main_ready 命令、看门狗）可能正拿着它准备
+            // PostMessageW。窗口销毁后这个整数值会被系统回收给别的窗口，
+            // 那时的 WM_CLOSE 就会投到一个**无关窗口**上。
+            shared().hwnd.store(0, Ordering::SeqCst);
             PostQuitMessage(0);
             0
         }
@@ -184,17 +197,28 @@ unsafe extern "system" fn wnd_proc(
 unsafe fn on_timer(hwnd: HWND) {
     let t = elapsed_ms();
 
-    // 动画播完就停掉重绘（省电），只等主界面就绪或超时收尾
     if t >= ANIM_MS {
-        KillTimer(hwnd, TIMER_ID);
-    }
-    if t >= ANIM_MS
-        && (shared().main_ready.load(Ordering::SeqCst) || t >= HOLD_MAX_MS as f32)
-    {
-        // 交给 WM_CLOSE 走正常的销毁路径
-        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        if !shared().holding.swap(true, Ordering::SeqCst) {
+            // ★ 这里**不能** KillTimer。
+            //
+            // 超时收尾的判断就在下面几行，而它只在 WM_TIMER 里跑 —— 定时器一停，
+            // 「最多等 6 秒」这条兜底就永远不会触发，代码看着在、实际是死的。
+            // （第一版就是这么写的，一直被外部的看门狗掩盖着，掩盖到差点没发现。）
+            // 改成降频继续跑：之后只剩一个时间判断，16ms 一次纯属浪费。
+            SetTimer(hwnd, TIMER_ID, HOLD_POLL_MS, None);
+            // 补画最后一帧，让进度条正好填满
+            InvalidateRect(hwnd, std::ptr::null(), 0);
+        }
+        // 正常路径：前端报告就绪 -> main_ready 命令 -> destroy() -> WM_CLOSE。
+        // 下面这条只是兜底：前端万一始终没报告（脚本出错、资源没加载上），
+        // 也不能让用户一直看着定格动画。
+        if t >= HOLD_MAX_MS as f32 {
+            crate::log::write("splash", "等主界面超时，自行收尾");
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        }
         return;
     }
+
     InvalidateRect(hwnd, std::ptr::null(), 0);
 }
 
@@ -242,7 +266,11 @@ unsafe fn run() {
         std::ptr::null_mut(),
     );
     if hwnd.is_null() {
-        crate::log::write("splash", "原生启动动画窗口创建失败");
+        // 失败要报出错误码，并且把刚注册的窗口类撤掉 —— 提前 return 会把类注册
+        // 留在系统里（虽然本进程马上就退，但这是条明显的泄漏路径）
+        let err = GetLastError();
+        crate::log::write("splash", format!("原生启动动画窗口创建失败（err={err}）"));
+        UnregisterClassW(class_name.as_ptr(), hinstance);
         return;
     }
     shared().hwnd.store(hwnd as isize, Ordering::SeqCst);
@@ -253,7 +281,13 @@ unsafe fn run() {
     // 立刻同步画第一帧。少了这一步，窗口会先以「未绘制」的状态暴露一瞬 ——
     // 用户看到的正是那一瞬的白底（第一版用 WebView 时白屏更久）。
     UpdateWindow(hwnd);
-    SetTimer(hwnd, TIMER_ID, FRAME_MS, None);
+    if SetTimer(hwnd, TIMER_ID, FRAME_MS, None) == 0 {
+        // 定时器起不来，动画既不会动、也永远不会自己收尾 ——
+        // 一个定格的启动画面比没有启动画面更糟（用户会以为程序卡死了）。
+        // 直接收尾，把主窗口让出来。
+        crate::log::write("splash", "启动动画定时器创建失败，直接收尾");
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
     crate::log::write(
         "splash",
         format!("原生启动动画已显示（{w}x{h} @{scale:.2}x），耗时 {:.0}ms", elapsed_ms()),

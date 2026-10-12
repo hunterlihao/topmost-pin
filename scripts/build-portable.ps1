@@ -51,23 +51,21 @@ if ($LASTEXITCODE -ne 0) { throw "Rust 构建失败" }
 Write-Host "==> 组装便携目录" -ForegroundColor Cyan
 $outDir = Join-Path $root "dist-portable\窗口置顶助手"
 
-# ★ 绝不删除已有的 data\ —— 那是用户的实际运行数据（WebView2 缓存、配置）。
-# 只替换 exe 与说明文件，数据目录原样保留。
-$dataDir = Join-Path $outDir "data"
-$preserved = $null
-if (Test-Path $dataDir) {
-    $preserved = Join-Path $env:TEMP ("tmp-data-backup-" + [guid]::NewGuid().ToString("N"))
-    Write-Host "    检测到已有数据，先临时移出以保护：$dataDir" -ForegroundColor Yellow
-    Move-Item $dataDir $preserved -Force
+# 目标 exe 正在运行时覆盖会失败（文件被占用），而报错会是一句
+# "being used by another process"，看不出该怎么办。先挡住并说清楚。
+$running = @(Get-Process -Name '窗口置顶助手' -ErrorAction SilentlyContinue)
+if ($running.Count -gt 0) {
+    throw ("「窗口置顶助手」正在运行（pid={0}），无法替换 exe。请先从托盘退出，再重新构建。" -f (($running | ForEach-Object { $_.Id }) -join ','))
 }
 
-if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-if ($preserved) {
-    Move-Item $preserved $dataDir -Force
-    Write-Host "    已还原原有数据目录（未改动）" -ForegroundColor Green
-}
+# ★ 只替换本脚本产出的那两个文件，**不重建整个目录**。
+#
+# 早先的写法是把 data\ 先挪到 %TEMP% 再挪回来，然后 Remove-Item -Recurse 清空目录。
+# 那有一段真实的丢数据窗口：脚本若在两步之间被打断，用户的运行数据就留在临时目录里，
+# 而目录已经被清空了。既然只有两个文件需要更新，就别去碰别的。
+Remove-Item (Join-Path $outDir "窗口置顶助手.exe") -Force -ErrorAction SilentlyContinue
 
 # cargo 的产物名取自 Cargo.toml 的 package name，不是 tauri.conf.json 的 productName
 $srcExe = Join-Path $root "src-tauri\target\release\topmost-pin.exe"
@@ -75,49 +73,12 @@ if (-not (Test-Path $srcExe)) { throw "找不到构建产物：$srcExe" }
 $dstExe = Join-Path $outDir "窗口置顶助手.exe"
 Copy-Item $srcExe $dstExe -Force
 
-# 使用说明
-$readme = @"
-窗口置顶助手 —— 便携版
-=====================================
-
-【怎么用】
-双击「窗口置顶助手.exe」即可运行，无需安装。
-
-两种置顶方式，随便用哪种：
-  1. 把鼠标指向目标窗口，按 Ctrl+Alt+P。再按一次取消。
-  2. 在界面列表里找到窗口，点它左边的图钉。
-
-已置顶的窗口会整行反相显示，排在列表最上方。
-
-【关掉窗口去哪了】
-关掉主窗口只是收进系统托盘，程序仍在后台守着已置顶的窗口。
-双击托盘图标可以重新打开界面。
-要真正退出：托盘右键 -> 退出，或界面「设置」页 -> 退出。
-
-【数据在哪】
-全部数据都在本目录下的 data\ 文件夹里：
-    data\webview\    WebView2 运行时缓存
-
-换电脑 / 换 U 盘：把整个「窗口置顶助手」文件夹拷走即可。
-程序不写系统目录，删除文件夹即彻底卸载。
-（唯一例外：如果勾选了「开机自启」，会在当前用户的注册表 Run 项里留一条记录，
-  在那个开关上取消勾选即会清除。）
-
-【系统要求】
-Windows 10 / 11 64 位。
-需要 WebView2 运行时（Win10 1803+ 与 Win11 已预装；若缺失请安装
-Microsoft Edge WebView2 Runtime）。
-
-【已知限制】
-· 以管理员身份运行的程序（如任务管理器）无法被置顶 —— 这是 Windows 的
-  完整性级别限制（UIPI）。本程序以普通权限运行，遇到这种情况会在界面上
-  明确提示，不会静默失败。
-· Ctrl+Alt+P 若被其他软件占用，界面会提示「热键未生效」，
-  此时仍可用界面列表正常置顶。
-· 退出程序会自动取消全部置顶。若程序异常结束留下残留，
-  重新运行后点一次「全部取消」即可清除。
-"@
-Set-Content -Path (Join-Path $outDir "使用说明.txt") -Value $readme -Encoding UTF8
+# 使用说明来自 packaging\ 下的正式文件，而不是写死在脚本里。
+# 写死在脚本里已经出过一次事：程序改成「固定管理员运行」之后，
+# 说明里的「本程序以普通权限运行」还留着，成了一份自相矛盾的交付文档。
+$manualSrc = Join-Path $root "packaging\使用说明.txt"
+if (-not (Test-Path $manualSrc)) { throw "找不到使用说明：$manualSrc" }
+Copy-Item $manualSrc (Join-Path $outDir "使用说明.txt") -Force
 
 Write-Host "==> 完成" -ForegroundColor Green
 $exeInfo = Get-Item $dstExe

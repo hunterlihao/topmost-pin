@@ -50,7 +50,11 @@ const pinnedCount = computed(() => state.windows.filter((w) => w.pinned).length)
 const visibleCount = computed(() => state.windows.length);
 
 const hotkeyKeys = computed(() => {
-  const hk = state.snapshot?.hotkey ?? "";
+  // ★ 热键没生效时后端返回的是占位文案「未生效」，它不是按键 ——
+  // 直接 split 会渲染出一个写着「未生效」的假键帽，看起来像是一个键。
+  // 判据用 hotkeyActive，而不是「字符串非空」。
+  if (!state.snapshot?.hotkeyActive) return [];
+  const hk = state.snapshot.hotkey ?? "";
   return hk ? hk.split("+").map((k) => k.trim()).filter(Boolean) : [];
 });
 
@@ -66,8 +70,14 @@ function dismissError() {
   state.error = "";
 }
 
-/** 拉取窗口列表与快照 */
-async function refresh() {
+/**
+ * 拉取窗口列表与快照。
+ *
+ * ★ 默认**不清**错误条：这个函数同时被 5 秒轮询和窗口聚焦刷新调用，
+ * 而错误条是「按热键失败」这类操作的唯一出口 —— 用户还没读完就被后台轮询
+ * 抹掉，表现就是「闪了一下就没了」。只有用户主动点「刷新」才算明确表示要看新状态。
+ */
+async function refresh(opts: { clearError?: boolean } = {}) {
   try {
     const [windows, snapshot] = await Promise.all([
       api.listWindows(),
@@ -75,7 +85,7 @@ async function refresh() {
     ]);
     state.windows = windows;
     state.snapshot = snapshot;
-    state.error = "";
+    if (opts.clearError) state.error = "";
   } catch (e) {
     state.error = `无法读取窗口列表：${String(e)}`;
   } finally {
@@ -158,21 +168,51 @@ async function rebindHotkey(combo: string): Promise<string | null> {
   }
 }
 
+/** 后端推送的注销函数。组件卸载时必须调用 —— 见 init 的注释 */
+let unlisteners: Array<() => void> = [];
+/** init 只真正跑一次 */
+let initPromise: Promise<void> | null = null;
+
 /** 挂载时调用：先订阅后端推送，再取初始状态。
  *
  * 顺序很重要 —— 热键线程注册完会立刻推一次 pin://changed 用来上报
  * 「热键是否生效」。如果先取快照再订阅，这一条就会丢，界面会显示错误的
  * 热键状态，直到下一次轮询才自愈。 */
 async function init() {
-  await api.onPinChanged(() => {
-    void refreshSnapshot();
-  });
+  // ★ 幂等。tauri 的 listen 没有同名去重，每次调用都会注册一个**新的**后端监听，
+  // 重复 init（组件重挂载、HMR）会让每个事件被处理多次、多打一轮 IPC。
+  initPromise ??= (async () => {
+    try {
+      unlisteners.push(
+        await api.onPinChanged(() => {
+          void refreshSnapshot();
+        }),
+      );
+      unlisteners.push(
+        await api.onPinError((p) => {
+          state.error = p.message;
+        }),
+      );
+    } catch (e) {
+      // 订阅失败不该让界面停摆：退化成只靠轮询刷新，但要说清楚
+      state.error = `无法订阅后端事件，将只靠轮询刷新：${String(e)}`;
+    }
+    await refresh();
+  })();
+  return initPromise;
+}
 
-  await api.onPinError((p) => {
-    state.error = p.message;
-  });
-
-  await refresh();
+/** 注销事件监听并复位。组件卸载时调用。 */
+function dispose() {
+  for (const off of unlisteners) {
+    try {
+      off();
+    } catch {
+      /* 注销失败不影响退出 */
+    }
+  }
+  unlisteners = [];
+  initPromise = null;
 }
 
 export function useAppStore() {
@@ -193,6 +233,7 @@ export function useAppStore() {
     dismissError,
     showToast,
     init,
+    dispose,
     setQuery: (q: string) => {
       state.query = q;
     },

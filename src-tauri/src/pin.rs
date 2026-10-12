@@ -102,13 +102,22 @@ impl PinManager {
     }
 
     /// 取消置顶。窗口已经不在了不算失败 —— 结果和用户想要的一致。
+    ///
+    /// ★ 顺序很重要：**先动窗口，成功之后再改集合**。
+    ///
+    /// 反过来（先移出集合、再 SetWindowPos）一旦失败，窗口还在最上层、程序却已经
+    /// 不认识它了：托盘不列它、`unpin_all` 清不掉它、`reassert` 也不再管它 ——
+    /// 界面显示「未置顶」而屏幕上是置顶窗口，用户只能靠「再置顶一次再取消」自救。
     pub fn unpin(&self, hwnd: HwndRaw) -> AppResult<()> {
-        let existed = self.inner.lock().remove(&hwnd).is_some();
-        if existed {
-            crate::log::write("pin", format!("移出集合 hwnd=0x{hwnd:X}"));
+        if !self.is_pinned(hwnd) {
+            return Ok(()); // 不在集合里：无事可做
         }
-        if existed && self.ops.is_alive(hwnd) {
+        if self.ops.is_alive(hwnd) {
+            // 失败就直接返回，集合保持原样 —— 状态与系统仍然是一致的
             self.ops.set_topmost(hwnd, false)?;
+        }
+        if self.inner.lock().remove(&hwnd).is_some() {
+            crate::log::write("pin", format!("移出集合 hwnd=0x{hwnd:X}"));
         }
         Ok(())
     }
@@ -138,7 +147,12 @@ impl PinManager {
                 dead.push(hwnd);
                 continue;
             }
-            if !self.ops.has_topmost_style(hwnd) {
+            // ★ 补位之前重新确认它**还在集合里**。
+            //
+            // `list()` 的快照与这里之间隔着好几次 Win32 调用，用户完全可能刚好在这一刻
+            // 取消了置顶（unpin 已经把它降下去）。不重新确认就会把它重新顶回去，
+            // 于是变成「程序认为未置顶、实际置顶」—— 和 unpin 顺序写反是同一种病。
+            if self.is_pinned(hwnd) && !self.ops.has_topmost_style(hwnd) {
                 // 失败就下次再试，不在这里报错刷屏
                 let _ = self.ops.set_topmost(hwnd, true);
             }
@@ -284,6 +298,33 @@ mod tests {
         let err = m2.pin(0x4000, "taskmgr").unwrap_err();
         assert!(matches!(err, AppError::AccessDenied));
         assert!(!m2.is_pinned(0x4000), "失败的目标不应留在集合里");
+    }
+
+    /// 可控的拒绝开关，用来在「已经置顶成功」之后再让取消置顶失败
+    fn manager_with_deny() -> (PinManager, Arc<AtomicBool>) {
+        let deny = Arc::new(AtomicBool::new(false));
+        let mut fake = FakeWin32::new().0;
+        fake.deny = deny.clone();
+        (PinManager::with_ops(Box::new(fake)), deny)
+    }
+
+    /// ★ 取消置顶失败时**不能**把窗口移出集合。
+    ///
+    /// 先移出集合再 SetWindowPos 的话，失败之后窗口还在最上层，而程序已经不认识它：
+    /// 托盘不列、unpin_all 清不掉、重断言也不管 —— 界面显示「未置顶」而屏幕上是
+    /// 置顶窗口，用户只能靠「再置顶一次再取消」自救。
+    #[test]
+    fn failed_unpin_keeps_the_window_in_the_set() {
+        let (m, deny) = manager_with_deny();
+        m.pin(0xA000, "a").expect("置顶应当成功");
+        assert!(m.is_pinned(0xA000));
+
+        deny.store(true, Ordering::SeqCst);
+        assert!(m.unpin(0xA000).is_err(), "SetWindowPos 失败应当报错");
+        assert!(
+            m.is_pinned(0xA000),
+            "取消置顶失败后必须仍然留在集合里，否则再也没有机会清掉它"
+        );
     }
 
     #[test]

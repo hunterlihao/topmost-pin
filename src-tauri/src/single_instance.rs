@@ -51,11 +51,26 @@ impl Drop for InstanceGuard {
     }
 }
 
+/// `acquire` 的结果。
+///
+/// ★ 必须把「已经有实例在跑」和「等旧实例退出等超时了」分开 —— 两者的处理方式
+/// 完全相反。都当成「重复启动」去唤醒旧实例的话，超时那一支会变成
+/// **两个进程都没了**（旧实例正在退出、没人接收唤醒），用户看到的是
+/// 「双击之后程序凭空消失」，而且日志上看不出任何异常。
+pub enum Acquire {
+    /// 拿到了：本进程是唯一实例
+    Owned(InstanceGuard),
+    /// 已经有实例在运行
+    Taken,
+    /// 重启路径下等待旧实例释放互斥体，等超时了
+    Timeout,
+}
+
 /// 尝试成为唯一实例。
 ///
 /// `wait_for_previous = true` 时，若旧实例还在，会轮询等待它退出 —— 这是权限切换
-/// 重启路径专用的；普通重复启动必须立刻返回 None，好让调用方去唤醒旧窗口。
-pub fn acquire(wait_for_previous: bool) -> Option<InstanceGuard> {
+/// 重启路径专用的；普通重复启动必须立刻返回 `Taken`，好让调用方去唤醒旧窗口。
+pub fn acquire(wait_for_previous: bool) -> Acquire {
     let name = to_wide(MUTEX_NAME);
     let deadline = Instant::now() + WAIT_PREVIOUS_TIMEOUT;
 
@@ -64,17 +79,20 @@ pub fn acquire(wait_for_previous: bool) -> Option<InstanceGuard> {
             let mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
             if mutex.is_null() {
                 // 创建失败（极少见）。保守起见当作「拿不到」，避免真的跑出两个实例。
-                return None;
+                return Acquire::Taken;
             }
             // ★ GetLastError 必须紧接着读，中间不能插入其它调用
             if GetLastError() != ERROR_ALREADY_EXISTS {
-                return Some(InstanceGuard { mutex });
+                return Acquire::Owned(InstanceGuard { mutex });
             }
             CloseHandle(mutex);
         }
 
-        if !wait_for_previous || Instant::now() >= deadline {
-            return None;
+        if !wait_for_previous {
+            return Acquire::Taken;
+        }
+        if Instant::now() >= deadline {
+            return Acquire::Timeout;
         }
         std::thread::sleep(POLL_INTERVAL);
     }

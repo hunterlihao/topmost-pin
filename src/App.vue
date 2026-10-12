@@ -17,10 +17,12 @@ const {
   dismissError,
   setView,
   init,
+  dispose,
 } = useAppStore();
 
 /* 窗口重新获得焦点时刷新一次；聚焦期间每 5s 轻量轮询。
-   轮询只在有焦点时进行，后台不消耗。 */
+   轮询只在有焦点时进行，后台不消耗。两点都刻意**不清错误条** ——
+   那是「按热键失败」这类操作的唯一出口，用户没读完不该被后台刷新抹掉。 */
 const POLL_MS = 5000;
 let timer: number | undefined;
 
@@ -30,24 +32,36 @@ function onFocus() {
 
 onMounted(async () => {
   // 等第一帧真的画出来再通知后端显示主窗口。
-  // 用两级 requestAnimationFrame：第一级在绘制前触发，第二级才落在首次绘制之后。
+  // 两级 requestAnimationFrame：第一级在绘制前触发，第二级才落在首次绘制之后。
   // 少了这一步，主窗口会先以白底暴露一瞬。
+  //
+  // 再加一个定时器兜底：主窗口此刻还是 visible(false)，而 Chromium 对不可见页面
+  // 会节流甚至暂停 rAF —— 真被暂停就没人报告就绪，用户只能干等后端 6.8 秒的看门狗。
+  // main_ready 是幂等的，多调一次无害。
+  const readyTimer = window.setTimeout(() => void api.mainReady(), 400);
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
+      window.clearTimeout(readyTimer);
       void api.mainReady();
     });
   });
 
-  await init();
+  // ★ 先注册资源、再 await init()。
+  // 反过来的话，init() 抛错（IPC 不可用等）会让下面的监听与定时器**永远不会被注册**，
+  // 界面从此停在「正在读取窗口…」，而且没有任何兜底刷新能救回来。
   window.addEventListener("focus", onFocus);
   timer = window.setInterval(() => {
     if (document.hasFocus()) void refresh();
   }, POLL_MS);
+
+  await init();
 });
 
 onUnmounted(() => {
   window.removeEventListener("focus", onFocus);
   if (timer !== undefined) window.clearInterval(timer);
+  // 不注销的话，每次重挂载都会多留一份后端监听
+  dispose();
 });
 </script>
 

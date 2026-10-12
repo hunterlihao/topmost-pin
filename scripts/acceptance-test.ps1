@@ -221,7 +221,7 @@ Write-Host ("本进程 DPI 感知模式：{0}" -f [Acc]::MakeDpiAware()) -Foregr
 $origin = New-Object Acc+POINT
 [void][Acc]::GetCursorPos([ref]$origin)
 
-Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 600
 
 $SW_MINIMIZE = 6
@@ -230,7 +230,17 @@ $SW_RESTORE = 9
 $proc = $null
 try {
     Write-Host '==> 启动被测应用' -ForegroundColor Cyan
-    $proc = Start-Process -FilePath $ExePath -PassThru
+    # ★ 必须带 --no-elevate。
+    #
+    # 程序固定以管理员运行，普通权限启动时会**自我提权重启**：ShellExecute runas
+    # 成功后旧进程直接 exit(0)（lib.rs「已发起提权重启，本进程退出…」）。
+    # 脚本跟踪的是 Start-Process 拿到的那个 pid，于是会看到：
+    #   · 下一行的「应用进程存活」假失败；
+    #   · 再往下 Get-Process -Id $proc.Id 直接抛终止错误 —— 脚本在投递 WM_HOTKEY
+    #     之前就崩了，这个**唯一**验证核心功能的端到端验收永远走不到断言。
+    # 而且 60 秒防抖会让它时好时坏，比稳定失败更难查。权限路径由
+    # scripts/diag-single-instance.ps1 单独验证。
+    $proc = Start-Process -FilePath $ExePath -ArgumentList '--no-elevate' -PassThru
     Start-Sleep -Seconds 8
     Check '应用进程存活' (-not $proc.HasExited) "pid=$($proc.Id)"
 
@@ -250,7 +260,7 @@ try {
     if ($target -eq [IntPtr]::Zero) {
         Write-Host '    找不到可用目标：桌面可见窗口全是测试脚手架自己的进程。' -ForegroundColor Yellow
         Write-Host '    这不是产品缺陷，是无法建立测试条件。' -ForegroundColor Yellow
-        Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
+        Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         [void][Acc]::SetCursorPos($origin.X, $origin.Y)
         Write-Host ''
         Write-Host '端到端验收跳过（退出码 2）。' -ForegroundColor Yellow
@@ -292,22 +302,44 @@ Set-Location '$root\src-tauri'
 $probeLine = ($probeOut -split "`n" | Where-Object { $_ -match '沙箱外窗口' } | Select-Object -First 1)
 Write-Host ("    " + $(if ($probeLine) { $probeLine.Trim() } else { '(探针没有输出)' })) -ForegroundColor DarkGray
 
-    $probeOk = $false
-    if ($probeLine -match '沙箱外窗口\s+(\d+)/(\d+)\s+成功') { $probeOk = ([int]$Matches[1] -gt 0) }
+    # ★ 探针有三种结局，必须分开判：
+    #   · 有目标且全部被拒 -> 这才是「环境按进程深度限制窗口操作」，退出码 2；
+    #   · 根本没找到目标   -> 条件没建立起来，**不能**据此下环境结论；
+    #   · 有目标且成功     -> 环境允许，继续往下做真断言。
+    # 之前两者走同一个出口，于是「探针没找到目标」也会被包装成「已验证环境限制」——
+    # 那是给一件没验证过的事情下结论。探针的候选进程是写死的 8 个，
+    # 而桌面上开着什么完全不受本脚本控制，这种情况很常见。
+    $probeTested = 0
+    $probeOkCount = 0
+    if ($probeLine -match '沙箱外窗口\s+(\d+)/(\d+)\s+成功') {
+        $probeOkCount = [int]$Matches[1]
+        $probeTested = [int]$Matches[2]
+    }
 
-    if (-not $probeOk) {
+    if ($probeTested -eq 0) {
+        Write-Host '    控制实验**没能建立条件**：探针在桌面上没找到名单里的目标程序。' -ForegroundColor Red
+        Write-Host '    这与「环境禁止跨进程置顶」是两回事，不能据此下环境结论。' -ForegroundColor Red
+        Write-Host '    请先开着 Chrome / Edge / 记事本之类再跑一次。' -ForegroundColor Red
+        Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        [void][Acc]::SetCursorPos($origin.X, $origin.Y)
+        Write-Host ''
+        Write-Host '端到端验收未能建立测试条件（退出码 3，非产品缺陷，但也**不是**环境结论）。' -ForegroundColor Red
+        exit 3
+    }
+
+    if ($probeOkCount -eq 0) {
         Write-Host '    控制实验失败：当前自动化环境按进程深度限制窗口操作。' -ForegroundColor Yellow
         Write-Host '    这不是产品缺陷 —— 一份用法显然正确的纯 Rust 控制台程序（与应用同为' -ForegroundColor Yellow
         Write-Host '    孙进程）对 explorer.exe / chrome.exe 的窗口执行同样的调用，也一律被拒；' -ForegroundColor Yellow
         Write-Host '    而 harness 直接派生的 pwsh 对同一窗口调用则成功。' -ForegroundColor Yellow
         Write-Host '    最终确认请手动双击 dist-portable 里的 exe（在资源管理器里启动）。' -ForegroundColor Yellow
-        Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
+        Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         [void][Acc]::SetCursorPos($origin.X, $origin.Y)
         Write-Host ''
         Write-Host '端到端验收跳过（退出码 2：环境不允许，非产品缺陷）。' -ForegroundColor Yellow
         exit 2
     }
-    Check '控制实验通过（环境允许孙进程跨进程置顶）' $true
+    Write-Host ("    控制实验通过：{0}/{1} 个沙箱外窗口置顶成功" -f $probeOkCount, $probeTested) -ForegroundColor Green
 
     if ($under -ne $target) {
         Write-Host '    目标被遮挡，跳过置顶断言（避免把「瞄错」误报成「功能失效」）' -ForegroundColor Yellow
@@ -369,7 +401,7 @@ Write-Host ("    " + $(if ($probeLine) { $probeLine.Trim() } else { '(探针没�
     }
 } finally {
     Write-Host '==> 收尾' -ForegroundColor Cyan
-    Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     [void][Acc]::SetCursorPos($origin.X, $origin.Y)
     Start-Sleep -Milliseconds 700
 }

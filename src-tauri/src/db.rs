@@ -18,9 +18,21 @@ use crate::error::{AppError, AppResult};
 
 /// 设置项键名。集中在这里，避免字符串散落各处拼错。
 pub mod keys {
-    /// 上次实际生效的热键文案，下次启动优先复用
+    /// **用户明确设定**的热键（在设置页改过，或 `--set-hotkey=` 指定的）。
+    ///
+    /// ★ 必须和「上次实际生效的」分开存。合成一个会有个很隐蔽的后果：
+    /// 用户设的组合被别的程序**临时**占用一次，启动时就退到候选、顺手把这个键
+    /// 覆盖成了候选 —— 用户的明确选择被一次临时冲突**永久**抹掉，
+    /// 而那正是这个设计想避免的「肌肉记忆失效」。
     pub const HOTKEY: &str = "hotkey";
-    /// 上次尝试权限切换的时间戳（毫秒）。用于防抖，避免重启失败后无限循环
+
+    /// 上次**实际生效**的热键（可能是自动挑的候选）。
+    ///
+    /// 只用来在用户没有明确设定时保持稳定：否则机器上可用组合一变，
+    /// 每次启动都会换一个，用户记不住。
+    pub const HOTKEY_LAST: &str = "hotkey_last";
+
+    /// 上次尝试提权的时间戳（毫秒）。用于防抖，避免提权失败后无限循环
     pub const LAST_SWITCH_AT: &str = "last_switch_at";
 }
 
@@ -52,6 +64,16 @@ impl Db {
         // 失败不致命（某些只读介质上会失败），继续用默认日志模式。
         let _ = conn.pragma_update(None, "journal_mode", "WAL");
         let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+
+        // ★ 必须设 busy timeout。
+        //
+        // WAL 允许多读单写，但写—写相撞时**没有 busy handler 就会立刻返回
+        // SQLITE_BUSY**。这个库有三个执行体在访问（Tauri 主线程、热键线程、
+        // 以及启动早期还没被单实例挡下的第二个进程）。撞上时
+        // `set_setting(HOTKEY, …)` 会被静默丢弃 —— 表现就是
+        // 「用户设好的热键下次启动莫名其妙变了」，而日志上什么都看不到。
+        conn.busy_timeout(std::time::Duration::from_secs(2))
+            .map_err(map_err)?;
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -129,17 +151,6 @@ impl Db {
         )
         .map_err(map_err)?;
         Ok(())
-    }
-
-    pub fn get_bool(&self, key: &str, default: bool) -> bool {
-        match self.get_setting(key) {
-            Some(v) => v == "1" || v.eq_ignore_ascii_case("true"),
-            None => default,
-        }
-    }
-
-    pub fn set_bool(&self, key: &str, value: bool) -> AppResult<()> {
-        self.set_setting(key, if value { "1" } else { "0" })
     }
 
     pub fn get_i64(&self, key: &str, default: i64) -> i64 {

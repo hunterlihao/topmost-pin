@@ -15,7 +15,7 @@ $name = '窗口置顶助手'
 function Count-App { @(Get-Process -Name $name -ErrorAction SilentlyContinue).Count }
 
 Write-Host '=== 彻底清理（含数据库，模拟全新安装）==='
-Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 Write-Host ("启动前进程数 = " + (Count-App))
 Remove-Item $log -Force -ErrorAction SilentlyContinue
@@ -39,7 +39,7 @@ try {
     Write-Host '=== 应用日志 ==='
     if (Test-Path $log) { Get-Content $log } else { Write-Host '(无日志)' }
 } finally {
-    Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     Write-Host ("收尾后进程数 = " + (Count-App))
 }

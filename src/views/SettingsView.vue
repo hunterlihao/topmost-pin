@@ -28,6 +28,23 @@ const recording = ref(false);
 const hotkeyError = ref("");
 let recordHintTimer: number | undefined;
 
+/** 只按了这些键还不算「按了主键」，录制要继续等 */
+const MODIFIER_KEYS = new Set([
+  "Control",
+  "Alt",
+  "Shift",
+  "Meta",
+  "AltGraph",
+  "CapsLock",
+]);
+
+function clearHintTimer() {
+  if (recordHintTimer) {
+    window.clearTimeout(recordHintTimer);
+    recordHintTimer = undefined;
+  }
+}
+
 function startRecording() {
   hotkeyError.value = "";
   recording.value = true;
@@ -46,10 +63,7 @@ function startRecording() {
 function stopRecording() {
   recording.value = false;
   window.removeEventListener("keydown", onRecordKey, true);
-  if (recordHintTimer) {
-    window.clearTimeout(recordHintTimer);
-    recordHintTimer = undefined;
-  }
+  clearHintTimer();
 }
 
 /** 从键盘事件取出主键名。只按了修饰键、或键位不受支持时返回 null。 */
@@ -66,15 +80,28 @@ function onRecordKey(e: KeyboardEvent) {
   e.preventDefault();
   e.stopPropagation();
 
+  // ★ 收到任何按键就撤掉那条「还没收到按键」的提示定时器。
+  // 不撤的话，2.5 秒后它会把刚显示出来的具体原因覆盖成一句不相干的话。
+  clearHintTimer();
+
   if (e.key === "Escape") {
     stopRecording();
     return;
   }
 
+  // 后端明确拒绝 Win 键（系统独占）。前端必须同样报错 ——
+  // 否则 Win+Alt+P 会被静默记成 Alt+P，绑上一个和用户按的**不一样**的组合。
+  if (e.metaKey) {
+    hotkeyError.value = "不支持 Win 键作为修饰键，请用 Ctrl / Alt / Shift";
+    return;
+  }
+
   const key = keyNameOf(e);
   if (!key) {
-    // 只按了修饰键就继续等主键，不打断录制；按了别的键才值得报错
-    if (!e.ctrlKey && !e.altKey && !e.shiftKey) {
+    // 只按修饰键就继续等主键，不打断录制。
+    // 按了别的键（方向键、Home、空格……）才值得报错 —— 否则那种输入会被
+    // 静默吞掉，表现和「被系统截走」一模一样，用户无从分辨。
+    if (!MODIFIER_KEYS.has(e.key)) {
       hotkeyError.value = "这个按键不支持，主键请用字母、数字或 F1–F24";
     }
     return;

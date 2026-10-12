@@ -202,7 +202,19 @@ fn refresh_now(app: &AppHandle) {
     let _ = tray.set_tooltip(Some(tooltip_text(app)));
 }
 
+/// 把主窗口拉到前台。
+///
+/// ★ 必须切回主线程。这个函数有两个调用方：
+///   · 托盘菜单 / 双击图标 —— 本来就在主线程；
+///   · **单实例监听线程**（重复启动时收到「唤醒」事件）—— 不在主线程。
+/// 窗口是主线程的资源，跨线程直接 show/set_focus 属于未定义用法，
+/// 只是平时不容易撞出问题。统一走 run_on_main_thread，两种调用方都安全。
 pub fn show_main(app: &AppHandle) {
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || show_main_now(&app));
+}
+
+fn show_main_now(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();

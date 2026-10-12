@@ -87,16 +87,45 @@ pub fn run() {
     //
     // 先抢互斥体就完全没有这个问题：抢不到 = 已经有实例在跑，
     // 直接唤醒它走人，权限碰都不碰。
+    // ★ 「本次是重启」必须同时满足两件事：标记文件在，**且我们确实已经提权**。
+    //
+    // 只看标记文件会留下一个极难查的后果：提权那一刻（UAC 还弹着）进程被杀掉，
+    // 标记就留在了盘上。之后**每次**启动都会以为「我是一次重启的结果」，
+    // 于是跳过提权 —— 程序从此永久以普通权限运行，而日志上一切正常，
+    // 只有用户觉得「怎么又置顶不了了」。
+    //
+    // 反过来判断是安全的：真正的重启一定是提权后的实例写的标记，
+    // 而提权失败的旧进程会自己把标记删掉。
+    let is_admin = elevation::is_elevated();
+
     let marker = elevation::marker_path(&paths.data_dir);
-    let relaunching = marker.exists();
-    if relaunching {
+    let marked = marker.exists();
+    let relaunching = marked && is_admin;
+    if marked {
+        // 认不认它都要清掉 —— 留着只会污染下一次启动
         let _ = std::fs::remove_file(&marker);
+        if !is_admin {
+            log::write(
+                "app",
+                "发现残留的 .relaunching 但当前并未提权，判定为上次提权中断，按普通启动处理",
+            );
+        }
     }
 
-    let Some(_guard) = single_instance::acquire(relaunching) else {
-        log::write("app", "已有实例在运行，唤醒它之后退出");
-        single_instance::signal_existing();
-        std::process::exit(0);
+    let _guard = match single_instance::acquire(relaunching) {
+        single_instance::Acquire::Owned(g) => g,
+        single_instance::Acquire::Taken => {
+            log::write("app", "已有实例在运行，唤醒它之后退出");
+            single_instance::signal_existing();
+            std::process::exit(0);
+        }
+        single_instance::Acquire::Timeout => {
+            // 上一次提权重启留下的旧实例迟迟没退出。这时既不能当「重复启动」去唤醒它
+            // （它正在退出、没人接收唤醒），也不能直接跑起来（两个实例会抢置顶状态）。
+            // 明确退出并留下记录：用户再双击一次就能正常启动。
+            log::write("app", "等待上一个实例退出超时，本次启动放弃（再启动一次即可）");
+            std::process::exit(1);
+        }
     };
 
     // ── 4) 提权 ───────────────────────────────────────────────────────────
@@ -110,7 +139,6 @@ pub fn run() {
     //
     // 提权失败（UAC 被拒 / 账户本身无管理员权限）不阻断启动：继续以当前权限运行，
     // 设置页会说明为什么有些窗口置顶不了。`--no-elevate` 可显式跳过本次提权。
-    let is_admin = elevation::is_elevated();
     log::write("app", format!("权限：已提权={is_admin} 本次是重启={relaunching}"));
 
     let no_elevate = std::env::args().any(|a| a == "--no-elevate");
@@ -164,25 +192,38 @@ pub fn run() {
         ])
         .setup(move |app| {
             let cache_dir = state.webview_cache_dir();
-            std::fs::create_dir_all(&cache_dir)?;
+            if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+                log::write("app", format!("创建 WebView2 缓存目录失败，退出：{e}"));
+                std::process::exit(2);
+            }
             let handle = app.handle().clone();
 
             // 主窗口先隐藏：等前端报告「第一帧已画好」再显示。
             // 由 Rust 定时显示是不行的 —— 它无从知道 WebView 什么时候才真的画出了内容，
             // 那样用户会看到一个还没画好的界面。
-            let window_config = app
+            let Some(window_config) = app
                 .config()
                 .app
                 .windows
                 .iter()
                 .find(|w| w.label == splash::MAIN_LABEL)
-                .ok_or_else(|| portable::err("tauri.conf.json 缺少 label=main 的窗口配置"))?
-                .clone();
+                .cloned()
+            else {
+                log::write("app", "tauri.conf.json 缺少 label=main 的窗口配置，退出");
+                std::process::exit(2);
+            };
 
-            WebviewWindowBuilder::from_config(&handle, &window_config)?
-                .data_directory(cache_dir)
-                .visible(false)
-                .build()?;
+            let built = WebviewWindowBuilder::from_config(&handle, &window_config)
+                .map(|b| b.data_directory(cache_dir).visible(false))
+                .and_then(|b| b.build());
+            if let Err(e) = built {
+                // ★ 这几处刻意不用 `?`。setup 返回 Err 会被 Tauri 变成 panic
+                // （tauri-2.11.5/src/app.rs:1424），而 release 是 GUI 子系统 ——
+                // panic 信息进不了控制台、也不会进日志。用户看到的只是
+                // 「启动画面一闪就没」，而日志干净得像没启动过，完全无法排查。
+                log::write("app", format!("主窗口创建失败，退出：{e}"));
+                std::process::exit(2);
+            }
             log::write("app", "主窗口已创建（隐藏），等待前端就绪");
             app.manage(state);
 
@@ -196,8 +237,11 @@ pub fn run() {
                 std::thread::spawn(move || apply_requested_hotkey(h, combo));
             }
 
-            // 托盘与热键
-            tray::setup(app)?;
+            // 托盘初始化失败不致命：没有托盘仍可从设置页退出，
+            // 但必须留下记录，否则用户只会发现「图标不见了」而不知道原因。
+            if let Err(e) = tray::setup(app) {
+                log::write("app", format!("托盘初始化失败（不影响置顶功能）：{e}"));
+            }
             let hk = hotkey::spawn(handle.clone());
             app.state::<AppState>().set_hotkey(hk);
 
@@ -219,14 +263,27 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .build(tauri::generate_context!())
-        .expect("启动窗口置顶助手失败");
+        .build(tauri::generate_context!());
+
+    let app = match app {
+        Ok(a) => a,
+        Err(e) => {
+            // 同样不能用 expect：GUI 子系统下 panic 信息无处可去
+            log::write("app", format!("启动失败，退出：{e}"));
+            std::process::exit(2);
+        }
+    };
 
     app.run(|app, event| {
         if let tauri::RunEvent::Exit = event {
             if let Some(state) = app.try_state::<AppState>() {
-                // 退出后没人再维护置顶，留着只会让那些窗口一直赖在最上层。
-                // 正常退出时恢复现场；异常崩溃留下的残留，重开点「全部取消」即可清掉。
+                // ★ 顺序不能反：**先让热键线程停手，再取消置顶**。
+                //
+                // 反过来的话，那个 1Hz 的重断言定时器会把 unpin_all 刚取消的窗口
+                // 重新顶回去；而且 WM_QUIT 排在已入队的 WM_TIMER 之后，
+                // `stop_hotkey()` 之后仍可能跑完一轮 on_tick。进程随后就消失，
+                // 那个窗口会**永久**留在最上层，而下次启动的集合里没有它。
+                hotkey::begin_shutdown();
                 state.unpin_all();
                 state.stop_hotkey();
                 log::write("app", "已退出");

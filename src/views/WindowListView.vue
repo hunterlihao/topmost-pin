@@ -51,7 +51,10 @@ function onSearch(e: Event) {
           已置顶
         </button>
       </div>
-      <button class="btn btn-sm" type="button" @click="refresh()">刷新</button>
+      <!-- 用户主动点刷新 = 明确表示要看最新状态，这时才清错误条 -->
+      <button class="btn btn-sm" type="button" @click="refresh({ clearError: true })">
+        刷新
+      </button>
       <button
         class="btn btn-sm"
         type="button"
@@ -66,9 +69,9 @@ function onSearch(e: Event) {
          热键没注册上时改说清楚，不能提示一个按了没反应的键。 -->
     <p v-if="pinnedCount === 0 && !s.loading" class="hint">
       <template v-if="s.snapshot?.hotkeyActive">
-        还没有置顶窗口 —— 指向任意窗口按
-        <KeyCap :keys="hotkeyKeys" />
-        ，或点下方窗口行左侧的图钉。
+        <!-- 逗号必须紧贴 KeyCap：中文换行在渲染时会变成一个空格，
+             写成两行就会显示成「… [P] ，或点…」 -->
+        还没有置顶窗口 —— 指向任意窗口按 <KeyCap :keys="hotkeyKeys" />，或点下方窗口行左侧的图钉。
       </template>
       <template v-else>
         还没有置顶窗口。热键被其它程序占用了，点下方窗口行左侧的图钉即可置顶

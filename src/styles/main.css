@@ -1,4 +1,5 @@
-@import "./tokens.css";
+/* 设计令牌由 main.ts 显式导入（在 main.css 之前）。
+   这里**不要**再 @import 一次 —— 那样打包出来的 CSS 里 :root 令牌块会出现两份。 */
 
 * {
   box-sizing: border-box;

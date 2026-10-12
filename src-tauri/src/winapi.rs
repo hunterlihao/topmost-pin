@@ -80,7 +80,11 @@ fn window_text(hwnd: HWND) -> String {
         if n <= 0 {
             return String::new();
         }
-        String::from_utf16_lossy(&buf[..n as usize])
+        // ★ 必须夹紧再切片。理论返回值不会超过缓冲区，但这个函数是从
+        // `extern "system"` 的枚举回调里调的 —— 越界切片会 panic，
+        // 而 panic 穿过 FFI 边界是**未定义行为**，不是「崩一下就好」。
+        // 一行 min 换掉一个 UB 入口，很划算。
+        debug_slice(&buf, n)
     }
 }
 
@@ -91,8 +95,15 @@ fn class_name(hwnd: HWND) -> String {
         if n <= 0 {
             return String::new();
         }
-        String::from_utf16_lossy(&buf[..n as usize])
+        debug_slice(&buf, n)
     }
+}
+
+/// 按 API 返回的长度取有效部分，并夹紧到缓冲区范围内
+#[inline]
+fn debug_slice(buf: &[u16], n: i32) -> String {
+    let len = (n.max(0) as usize).min(buf.len());
+    String::from_utf16_lossy(&buf[..len])
 }
 
 pub fn title_of(hwnd: HwndRaw) -> String {
@@ -136,14 +147,17 @@ pub fn process_name(pid: u32) -> String {
         if h.is_null() {
             return UNKNOWN_PROCESS.to_string();
         }
-        let mut buf = vec![0u16; 260];
+        // 260（MAX_PATH）不够：长路径（`\\?\` 前缀、深层 node_modules、
+        // 某些安装器的临时目录）会让 QueryFullProcessImageNameW 直接失败，
+        // 列表里就出现「未知进程」——而且看不出是长度问题。
+        let mut buf = vec![0u16; 1024];
         let mut size = buf.len() as u32;
         let ok = QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut size);
         CloseHandle(h);
         if ok == 0 || size == 0 {
             return UNKNOWN_PROCESS.to_string();
         }
-        let full = String::from_utf16_lossy(&buf[..size as usize]);
+        let full = debug_slice(&buf, size as i32);
         full.rsplit('\\')
             .next()
             .filter(|s| !s.is_empty())

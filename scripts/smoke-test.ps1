@@ -11,8 +11,10 @@
       - 界面真的渲染了（截图像素采样，而不是只看进程活着）
 
     实现注意：
-      · 枚举窗口一律走编译好的 C# 辅助方法。不要用 PowerShell 脚本块当
-        委托回调 —— 在本机实测会卡死。
+      · 枚举窗口一律走编译好的 C# 辅助方法，不要用 PowerShell 脚本块当委托回调。
+        这个写法在本机踩过一次卡死（回调里还逐窗口调用了 PowerShell 函数）。
+        后来复测 winprobe.ps1（同类写法）是正常的，所以不是必然卡死 ——
+        但既然已经有编译好的 C#，就没必要再冒这个险。
       · 应用是常驻托盘程序，不会自己退出，因此必须在 finally 里无条件收掉，
         否则调用方会一直等下去。
 
@@ -194,6 +196,26 @@ public class WinCap {
         return _scratch.ToArray();
     }
 
+    /// 列出**所有**可见且有标题的顶层窗口（不限进程），返回可读描述。
+    ///
+    /// 诊断失败时用它把人眼能对照的窗口清单打出来 —— 注意不能照抄
+    /// acceptance-test 里的 [Acc] 类：那个类名不同，写混了会在失败分支里
+    /// 抛「方法不存在」，把本来要输出的诊断信息全部吞掉。
+    public static string[] AllWindows() {
+        _scratch = new List<string>();
+        EnumWindows((h, l) => {
+            if (!IsWindowVisible(h)) return true;
+            var t = new StringBuilder(512); GetWindowTextW(h, t, 512);
+            if (t.ToString().Trim().Length == 0) return true;
+            var c = new StringBuilder(256); GetClassNameW(h, c, 256);
+            uint p; GetWindowThreadProcessId(h, out p);
+            _scratch.Add(string.Format("hwnd=0x{0:X} pid={1} class=[{2}] title=[{3}]",
+                h.ToInt64(), p, c.ToString(), t.ToString()));
+            return true;
+        }, IntPtr.Zero);
+        return _scratch.ToArray();
+    }
+
     /// 按标题子串查找窗口；返回第一个匹配的可见窗口
     public static IntPtr FindByTitle(string needle) {
         IntPtr result = IntPtr.Zero;
@@ -234,7 +256,7 @@ function Save-WindowPng {
 # ── 开始 ─────────────────────────────────────────────────────────────────
 
 Write-Host '==> 清理已有实例与上次的测试数据' -ForegroundColor Cyan
-Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 600
 
 # ★ 数据库必须清掉。上次运行可能把「以管理员身份运行」设成了开，
@@ -243,10 +265,23 @@ Start-Sleep -Milliseconds 600
 #   「进程存活」失败、「第二次启动不产生第二个进程」变成 1->2、窗口矩形成 0x0。
 #   实测就是这么被坑过一次，排查花了不少时间。
 $dataDirEarly = Join-Path $AppDir 'data'
+$staleLog = Join-Path $dataDirEarly 'topmost-pin.log'
 if (Test-Path $dataDirEarly) {
     Get-ChildItem (Join-Path $dataDirEarly 'data.db*') -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $dataDirEarly 'topmost-pin.log') -Force -ErrorAction SilentlyContinue
+    Remove-Item $staleLog -Force -ErrorAction SilentlyContinue
+}
+
+# ★ 删完必须**确认真的删掉了**，这是本脚本所有日志断言的前提。
+#
+# 应用写日志用的是追加模式（log.rs：OpenOptions append），启动时不会清空；
+# 而删除失败是可能的（进程刚被杀、句柄还没释放，杀软在索引）。
+# 一旦没删掉，后面所有子串断言都会命中**上一轮的日志**：
+# 「前端已就绪」「权限：已提权=」「原生启动动画已显示…耗时 137ms」
+# 「注册成功：Ctrl+Alt+Shift+F23」…… 连「启动动画 500ms 内显示」
+# 这条时序断言都会命中残留，于是整轮**假通过**。
+if (Test-Path $staleLog) {
+    throw "上一轮的日志没能删掉，本脚本的日志断言不可信：$staleLog"
 }
 
 Write-Host '==> PE 子系统' -ForegroundColor Cyan
@@ -412,20 +447,27 @@ try {
             }
             $bmp.Dispose()
 
-            Check '窗口尺寸合理' ($true) ("{0}x{1}" -f $w, $h)
+            # 走到这里 w/h 必然 > 100（上面的 guard 已经保证），
+            # 所以这里不再补一句恒真的「窗口尺寸合理」—— 恒真断言只会给
+            # 「全部通过」的计数掺水。
             Check '界面已渲染（采样到多种颜色，非白屏）' ($colors.Count -gt 8) "采样到 $($colors.Count) 种颜色"
-            Write-Host ("    截图: {0}" -f $shot)
+            Write-Host ("    窗口尺寸 {0}x{1}  截图: {2}" -f $w, $h, $shot)
     } else {
-        # 失败时把标题匹配的窗口全打出来，便于区分「句柄失效」与「窗口真的没出现」
+        # 失败时把标题匹配的窗口全打出来，便于区分「句柄失效」与「窗口真的没出现」。
+        # 包一层 try/catch：诊断输出本身失败不能把后面的结论汇总一起带走。
         Write-Host '    标题匹配的可见窗口：' -ForegroundColor DarkGray
-        foreach ($line in [WinCap]::AllWindows()) {
-            if ($line -match $WindowTitle) { Write-Host "      $line" -ForegroundColor DarkGray }
+        try {
+            foreach ($line in [WinCap]::AllWindows()) {
+                if ($line -match $WindowTitle) { Write-Host "      $line" -ForegroundColor DarkGray }
+            }
+        } catch {
+            Write-Host ("      （列举失败：{0}）" -f $_.Exception.Message) -ForegroundColor DarkGray
         }
         Check '窗口尺寸合理' $false ("{0}x{1}" -f $w, $h)
     }
 } finally {
     Write-Host '==> 收尾' -ForegroundColor Cyan
-    Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 900
     Check '进程已全部退出' (@(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue).Count -eq 0)
 }
