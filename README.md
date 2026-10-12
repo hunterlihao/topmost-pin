@@ -248,6 +248,14 @@ UAC，等用户点完才发现旧实例还在、唤醒它然后退出 —— 白
 `data\topmost-pin.log` 是另一个东西 —— 诊断日志，不是数据。GUI 子系统程序没有控制台，
 `println!` 与 panic 信息都无处可去，出问题时只能盲猜，所以关键事件都写进这个文件。
 
+**`data\` 会比 exe 还大。** 里面还有 `data\webview\` —— WebView2 的运行时配置目录，
+用一段时间后 30~50 MB（实测 37.6 MB，同期 exe 7.5 MB）。这是 WebView2 的正常行为，
+不是泄漏。它里面还包含 Chromium 标准的 `Cookies` / `History` / `Login Data` 等文件
+（本程序只加载内嵌界面，不访问外部网页）。
+
+所以 **Release 里的 zip 只装 `exe` + `使用说明.txt`**，不含 `data\`：把本机的运行痕迹
+打包发出去，既臃肿又没必要。`.gitignore` 同样排除 `data\` 与 `artifacts\`。
+
 ## 界面
 
 界面按 z 序分成**两个平面**，而不是一张列表：
@@ -363,6 +371,7 @@ cargo test --offline --features custom-protocol -- --ignored       # +6 项真�
 | `scripts/acceptance-test.ps1` | 见下方说明 | 见下方说明 |
 | `scripts/acceptance-test.ps1` | 真实投递 `WM_HOTKEY`（等价按键）后用独立探针断言目标窗口已置顶 | 见下方说明 |
 | `scripts/diag-single-instance.ps1` | 干净环境下单独确认单实例 / 提权重启行为 | 诊断用 |
+| `scripts/preview/` | 用 IPC 桩把**真实构建产物**渲染成 9 个界面状态并截图（台面上 3 行 / 9 行、全部置顶、搜索无结果、无管理员权限、设置页、窄窗）—— 这些状态启动一次到不了。见 [`docs/design.md`](docs/design.md) 第 10 节 | 设计自检用 |
 
 ### 一次完整的缺陷审计（含两处**刻意不改**）
 

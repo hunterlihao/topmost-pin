@@ -209,15 +209,20 @@
 ## 10. 怎么自检
 
 界面有 9 个状态是启动一次到不了的（台面上有 3 行 / 9 行、全部置顶、搜索无结果、
-无管理员权限、设置页、窄窗……）。`artifacts/preview/`（已 gitignore）用一个
-**IPC 桩**把真实构建产物渲染成这 9 个状态并逐个截图，界面代码一行都不用改、
-也不用给应用塞调试开关：
+无管理员权限、设置页、窄窗……）。`scripts/preview/` 用一个 **IPC 桩**把真实构建产物
+渲染成这 9 个状态并逐个截图，界面代码一行都不用改、也不用给应用塞调试开关：
 
 ```powershell
-node artifacts\preview\serve.mjs 4199      # 另开一个终端
-node artifacts\preview\make-preview.mjs
-pwsh -File artifacts\preview\shoot.ps1     # 输出到 artifacts\preview\*.png
+# 在仓库根目录执行
+node scripts\preview\serve.mjs 4199        # 另开一个终端，保持运行
+node scripts\preview\make-preview.mjs      # 生成 dist\preview-*.html
+pwsh -File scripts\preview\shoot.ps1       # 用 Edge headless 截图到 artifacts\preview\*.png
 ```
 
+`--force-device-scale-factor=1`，所以 PNG 的像素尺寸等于 CSS 尺寸，看间距和字号时是
+1:1 的。夹具里故意包含两组**标题完全相同**的窗口（两个「新建标签页」、两个「项目 -
+Visual Studio Code」），用来检查 HWND 那一列到底有没有存在的必要。
+
 这一步不是可选的：第一次跑出来的是**完全没有样式的 HTML** —— 构建把 CSS 抽成了独立
-文件，而预览页只引了 JS。没有截图，这个错误会一路留到用户那里。
+文件，而预览页只引了 JS。没有截图，这个错误会一路留到用户那里。同理，改完间距和断点
+之后也要重跑一次：浏览器里看着对，和 940×680 / 780px 下真的好，是两件事。
