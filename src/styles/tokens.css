@@ -1,0 +1,73 @@
+/* 设计令牌：浅色 / 深色双主题。
+   语义色刻意区分「已置顶」与「可置顶」两态，并额外用形状（实心图钉 / 空心图钉）
+   辅助，不单靠颜色传达状态。 */
+
+:root,
+:root[data-theme="light"] {
+  --bg: #f7f8fc;
+  --bg-elev: #ffffff;
+  --bg-sunken: #eef0f8;
+  --fg: #171a2b;
+  --fg-muted: #5d6480;
+  --fg-subtle: #8f95ad;
+  --border: #e4e7f2;
+  --border-strong: #d2d7e8;
+
+  --brand: #4f46e5;
+  --brand-hover: #4338ca;
+  --brand-soft: #e8e7fd;
+  --brand-fg: #ffffff;
+
+  /* 「已置顶」态：琥珀色，与品牌色形成明确对比 */
+  --pinned: #b45309;
+  --pinned-bg: #fef3c7;
+  --pinned-border: #fbbf24;
+
+  --ok: #059669;
+  --ok-soft: #ecfdf5;
+  --warn: #d97706;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+
+  --shadow-sm: 0 1px 2px rgba(23, 26, 43, 0.06);
+  --shadow-md: 0 4px 16px rgba(23, 26, 43, 0.08);
+  --shadow-lg: 0 12px 32px rgba(23, 26, 43, 0.14);
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+}
+
+:root[data-theme="dark"] {
+  --bg: #101223;
+  --bg-elev: #1a1d33;
+  --bg-sunken: #0b0d1a;
+  --fg: #eef0fa;
+  --fg-muted: #a2a8c4;
+  --fg-subtle: #767d9c;
+  --border: #272b47;
+  --border-strong: #363b5c;
+
+  --brand: #818cf8;
+  --brand-hover: #a5b4fc;
+  --brand-soft: #262a4d;
+  --brand-fg: #101223;
+
+  --pinned: #fcd34d;
+  --pinned-bg: #3a2e12;
+  --pinned-border: #a16207;
+
+  --ok: #34d399;
+  --ok-soft: #12312a;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --danger-soft: #3a1d1d;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+}

@@ -1,0 +1,27 @@
+{
+  "name": "topmost-pin",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "窗口置顶助手 - 便携版任意窗口置顶工具",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "icons": "node scripts/gen-icons.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "vue": "^3.5"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^26.6.2",
+    "@vitejs/plugin-vue": "^6",
+    "typescript": "^5.9",
+    "vite": "^7",
+    "vue-tsc": "^3"
+  }
+}

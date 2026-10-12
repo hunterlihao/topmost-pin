@@ -1,0 +1,14 @@
+# 统一换行符，避免 Windows 下出现满屏 CRLF 警告
+* text=auto eol=lf
+
+# Windows 专用脚本保留 CRLF，方便直接双击运行
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件不做转换
+*.png binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.db binary

@@ -1,0 +1,4 @@
+# pnpm 12 默认禁止依赖执行安装脚本（供应链安全）。esbuild 需要其安装脚本
+# 来落地平台二进制，Vite 依赖它，因此显式放行。
+allowBuilds:
+  esbuild: true

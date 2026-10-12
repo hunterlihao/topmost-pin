@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "窗口置顶助手主窗口默认权限。窗口的隐藏/显示/聚焦一律走自定义 Rust 命令，因此无需额外 window 权限。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

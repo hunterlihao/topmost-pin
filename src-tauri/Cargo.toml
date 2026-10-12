@@ -1,0 +1,61 @@
+[package]
+name = "topmost-pin"
+version = "1.0.0"
+description = "窗口置顶助手 - 便携版任意窗口置顶工具"
+authors = ["liyuanhao"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "topmost_pin_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 只启用 tray-icon。切勿启用 image-png / image-ico：它们依赖 `image` crate，
+# 而该 crate 不在本机离线缓存中。托盘图标改用 app.default_window_icon()。
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+
+# Win32 直调。本机 cargo 无法联网，只能用已缓存且已在本机 Cargo.lock 中解析过的版本。
+# windows-sys 0.61.2 已在 menstruation 的锁文件中，故加入依赖树零成本。
+# 注意：tauri-plugin-global-shortcut / global-hotkey 未在离线缓存中，因此全局热键
+# 一律走 RegisterHotKey 直调（见 src/hotkey.rs），不得引入该插件。
+[dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+]
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+dirs = "6"
+parking_lot = "0.12"
+
+[features]
+# ★ 生产构建必须启用本 feature，否则 Tauri 会判定为开发模式。
+#
+# 机制：tauri/build.rs 里 `let dev = !custom_protocol;`，而 tauri-codegen 在
+# `dev && dev_url.is_some()` 时把窗口指向 devUrl（http://localhost:1420）。
+# 结果就是「窗口能开、但显示 localhost 拒绝连接」，内嵌资源根本没用上。
+#
+# `tauri build` 会自动带上它；直接跑 `cargo build --release` 时必须手动
+# 传 `--features custom-protocol`。
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+# 说明：这里刻意不使用 codegen-units = 1 / lto = "fat"。
+# 那会把整个 crate 合成一个 40MB+ 的目标文件，在本机（带实时防病毒扫描）上
+# 会导致 rustc 写入后立即删除该文件时被占用而报 os error 32。
+# thin LTO + 默认 codegen-units 体积几乎相当，但构建稳定得多。
+lto = "thin"
+codegen-units = 16
+opt-level = "s"
+strip = true
