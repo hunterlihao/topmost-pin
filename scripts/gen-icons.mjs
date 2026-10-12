@@ -1,7 +1,8 @@
 // 纯 Node 实现的图标源文件生成器 —— 不依赖任何第三方图形库。
 // 产出 assets/icon-source.png (1024x1024)，随后由 `pnpm tauri icon` 生成全套平台图标。
 //
-// 设计：圆角方形渐变底 + 白色月牙 + 三颗周期圆点（暗示周期推进）
+// 设计：与 docs/design.md 同一套语言 —— 严格单色。
+// 近黑圆角方块 + 纯白图钉。图钉是这套界面的签名符号（置顶 = 抬升），图标复用同一意象。
 
 import { deflateSync } from "node:zlib";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -75,62 +76,53 @@ function insideRoundRect(x, y, left, top, right, bottom, r) {
   return dx * dx + dy * dy <= r * r;
 }
 
-function insideCircle(x, y, cx, cy, r) {
-  const dx = x - cx;
-  const dy = y - cy;
-  return dx * dx + dy * dy <= r * r;
-}
-
-const lerp = (a, b, t) => a + (b - a) * t;
-const mixRGB = (c1, c2, t) => [
-  lerp(c1[0], c2[0], t),
-  lerp(c1[1], c2[1], t),
-  lerp(c1[2], c2[2], t),
-];
-
 /* ------------------------------ 绘制 ------------------------------ */
 
 const SIZE = 1024;
-const SS = 4; // 每轴 4x 超采样 → 16 样本/像素，获得平滑边缘
+const SS = 4; // 每轴 4x 超采样 → 16 样本/像素，边缘平滑
 
-const PAD = 56;
-const RADIUS = 232;
-const C_TOP = [244, 114, 182]; // #F472B6
-const C_BOT = [147, 51, 234]; // #9333EA
-const WHITE = [255, 255, 255];
+// 与 src/styles/tokens.css 完全一致的取值
+const INK = [0x0a, 0x0a, 0x0a]; // --ink
+const PAPER = [0xff, 0xff, 0xff]; // --paper
 
-// 月牙 = 大圆 减去 偏移圆
-const MOON_BIG = { cx: 0.5 * SIZE, cy: 0.47 * SIZE, r: 0.265 * SIZE };
-const MOON_SUB = { cx: 0.605 * SIZE, cy: 0.405 * SIZE, r: 0.243 * SIZE };
+const PAD = 48;
+const RADIUS = 204;
 
-// 三颗周期圆点
-const DOTS = [
-  { cx: 0.355 * SIZE, cy: 0.78 * SIZE, r: 0.03 * SIZE, a: 1.0 },
-  { cx: 0.5 * SIZE, cy: 0.78 * SIZE, r: 0.03 * SIZE, a: 0.62 },
-  { cx: 0.645 * SIZE, cy: 0.78 * SIZE, r: 0.03 * SIZE, a: 0.32 },
-];
+// 图钉几何：顶部法兰 + 收窄的柱身 + 针 + 针尖
+// 柱身刻意做矮、收窄幅度刻意做小 —— 否则整体会读成漏斗而非图钉。
+const CX = SIZE / 2;
+const FLANGE = { left: 318, top: 250, right: 706, bottom: 330, r: 40 };
+const BODY = { top: 330, bottom: 566, topHalfW: 144, botHalfW: 68 };
+const NEEDLE = { top: 566, bottom: 802, halfW: 23 };
+const TIP = { top: 802, bottom: 884 };
+
+function insidePin(x, y) {
+  if (
+    insideRoundRect(x, y, FLANGE.left, FLANGE.top, FLANGE.right, FLANGE.bottom, FLANGE.r)
+  ) {
+    return true;
+  }
+  if (y >= BODY.top && y <= BODY.bottom) {
+    const t = (y - BODY.top) / (BODY.bottom - BODY.top);
+    const halfW = BODY.topHalfW + (BODY.botHalfW - BODY.topHalfW) * t;
+    if (Math.abs(x - CX) <= halfW) return true;
+  }
+  if (y >= NEEDLE.top && y <= NEEDLE.bottom && Math.abs(x - CX) <= NEEDLE.halfW) {
+    return true;
+  }
+  if (y > TIP.top && y <= TIP.bottom) {
+    const t = (y - TIP.top) / (TIP.bottom - TIP.top);
+    if (Math.abs(x - CX) <= NEEDLE.halfW * (1 - t)) return true;
+  }
+  return false;
+}
 
 /** 返回某个连续坐标点的 RGBA（0-255，非预乘） */
 function sample(x, y) {
   if (!insideRoundRect(x, y, PAD, PAD, SIZE - PAD, SIZE - PAD, RADIUS)) {
     return [0, 0, 0, 0];
   }
-
-  const t = (x + y) / (2 * SIZE);
-  let col = mixRGB(C_TOP, C_BOT, t);
-
-  if (insideCircle(x, y, MOON_BIG.cx, MOON_BIG.cy, MOON_BIG.r) &&
-      !insideCircle(x, y, MOON_SUB.cx, MOON_SUB.cy, MOON_SUB.r)) {
-    col = WHITE;
-  } else {
-    for (const d of DOTS) {
-      if (insideCircle(x, y, d.cx, d.cy, d.r)) {
-        col = mixRGB(col, WHITE, d.a);
-        break;
-      }
-    }
-  }
-
+  const col = insidePin(x, y) ? PAPER : INK;
   return [col[0], col[1], col[2], 255];
 }
 
@@ -141,7 +133,10 @@ function render() {
 
   for (let py = 0; py < SIZE; py++) {
     for (let px = 0; px < SIZE; px++) {
-      let r = 0, g = 0, b = 0, a = 0;
+      let r = 0,
+        g = 0,
+        b = 0,
+        a = 0;
       for (let sy = 0; sy < SS; sy++) {
         for (let sx = 0; sx < SS; sx++) {
           const c = sample(px + (sx + 0.5) * step, py + (sy + 0.5) * step);
@@ -156,7 +151,10 @@ function render() {
       const alpha = a * inv;
       const off = (py * SIZE + px) * 4;
       if (alpha <= 0.5) {
-        rgba[off] = 0; rgba[off + 1] = 0; rgba[off + 2] = 0; rgba[off + 3] = 0;
+        rgba[off] = 0;
+        rgba[off + 1] = 0;
+        rgba[off + 2] = 0;
+        rgba[off + 3] = 0;
       } else {
         // 还原为直通 alpha
         const wsum = a / 255;
