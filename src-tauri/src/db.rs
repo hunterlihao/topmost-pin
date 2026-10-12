@@ -18,8 +18,6 @@ use crate::error::{AppError, AppResult};
 
 /// 设置项键名。集中在这里，避免字符串散落各处拼错。
 pub mod keys {
-    /// 是否以管理员身份运行（"1" / "0"）
-    pub const RUN_AS_ADMIN: &str = "run_as_admin";
     /// 上次实际生效的热键文案，下次启动优先复用
     pub const HOTKEY: &str = "hotkey";
     /// 上次尝试权限切换的时间戳（毫秒）。用于防抖，避免重启失败后无限循环
@@ -175,5 +173,85 @@ impl Db {
         let conn = self.conn.lock();
         conn.query_row("SELECT COUNT(*) FROM pin_events", [], |r| r.get(0))
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDb {
+        db: Db,
+        path: std::path::PathBuf,
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+            // WAL 模式会额外生成这两个附属文件
+            for suffix in ["-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", self.path.display()));
+            }
+        }
+    }
+
+    fn temp_db(tag: &str) -> TempDb {
+        // 测试库放在 target/ 下，而不是 %TEMP%：
+        // 本机文件沙箱允许写工作区，但拒绝写 %TEMP%，SQLite 会以
+        // 「unable to open database file」失败 —— 那个报错完全看不出是权限问题。
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-db");
+        std::fs::create_dir_all(&dir).expect("创建测试临时目录");
+
+        let path = dir.join(format!("{tag}-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).expect("打开临时数据库");
+        db.migrate().expect("建表");
+        TempDb { db, path }
+    }
+
+    /// 迁移必须可重复执行 —— 每次启动都会调用它，不能第二次就出错或重建表。
+    #[test]
+    fn migrate_is_idempotent() {
+        let t = temp_db("migrate");
+        t.db.migrate().expect("第二次迁移");
+        t.db.migrate().expect("第三次迁移");
+    }
+
+    /// 设置项读写往返，且「没设置过」与「设置成空」要能区分开。
+    #[test]
+    fn settings_round_trip() {
+        let t = temp_db("settings");
+
+        assert_eq!(t.db.get_setting(keys::HOTKEY), None, "从未设置过应为 None");
+
+        t.db.set_setting(keys::HOTKEY, "Ctrl+Shift+P").expect("写入");
+        assert_eq!(
+            t.db.get_setting(keys::HOTKEY).as_deref(),
+            Some("Ctrl+Shift+P")
+        );
+
+        // 覆盖写：同一个 key 应当更新而不是插入第二条
+        t.db.set_setting(keys::HOTKEY, "Ctrl+Alt+K").expect("覆盖写");
+        assert_eq!(
+            t.db.get_setting(keys::HOTKEY).as_deref(),
+            Some("Ctrl+Alt+K")
+        );
+
+        t.db.set_i64(keys::LAST_SWITCH_AT, 1234).expect("写整数");
+        assert_eq!(t.db.get_i64(keys::LAST_SWITCH_AT, 0), 1234);
+        assert_eq!(t.db.get_i64("不存在的键", 42), 42, "缺省时应取默认值");
+    }
+
+    /// 置顶事件只增不改，计数应当准确（设置页展示的就是它）
+    #[test]
+    fn pin_events_are_counted() {
+        let t = temp_db("events");
+        assert_eq!(t.db.pin_event_count(), 0);
+
+        t.db.record_pin_event(0x1234, "记事本", "notepad.exe", "pin");
+        t.db.record_pin_event(0x1234, "记事本", "notepad.exe", "unpin");
+        t.db.record_pin_event(0x5678, "计算器", "calc.exe", "pin");
+
+        assert_eq!(t.db.pin_event_count(), 3);
     }
 }

@@ -258,7 +258,10 @@ Write-Host ("    本次截图进程 DPI 感知模式：{0}" -f $dpiMode)
 $proc = $null
 try {
     Write-Host '==> 启动' -ForegroundColor Cyan
-    $proc = Start-Process -FilePath $ExePath -PassThru
+    # --no-elevate：应用默认以管理员运行，会自我提权重启。冒烟测试要跟踪的
+    # 是「一个进程从起到收」，自我重启会让 pid 立刻失效（README 踩坑记录第 11 条）。
+    # 权限切换本身由 scripts/diag-single-instance.ps1 单独验证。
+    $proc = Start-Process -FilePath $ExePath -ArgumentList '--no-elevate' -PassThru
 
     # ── 抓启动动画 ────────────────────────────────────────────────────────
     # 动画窗是**原生 GDI 窗口**（类名 TopMostPinSplash），不是 Tauri 窗口 ——
@@ -347,7 +350,9 @@ try {
     if (Test-Path $logPath) {
         $logText = Get-Content $logPath -Raw
         Check '前端就绪后启动动画收尾、主窗口显示' ($logText -match '前端已就绪')
-        Check '权限状态已判定并记录' ($logText -match '权限：设置=')
+        Check '权限状态已判定并记录' ($logText -match '权限：已提权=')
+        # 冒烟测试用 --no-elevate 跑，应用应当明确记下「本次不尝试提权」
+        Check '--no-elevate 已被识别' ($logText -match '命令行指定 --no-elevate')
 
         # ★ 这是本轮修复的验收点：启动动画必须在 Tauri/WebView2 起来之前就显示。
         #   第一版用 WebView 画启动画面，窗口出现时已经过了 1.5 秒，且先是一片白。
@@ -363,7 +368,7 @@ try {
 
     Write-Host '==> 单实例' -ForegroundColor Cyan
     $before = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue).Count
-    $second = Start-Process -FilePath $ExePath -PassThru
+    $second = Start-Process -FilePath $ExePath -ArgumentList '--no-elevate' -PassThru
     Start-Sleep -Seconds 5
     $after = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)
     Check '第二次启动不产生第二个进程' ($after.Count -eq $before) "启动前=$before 启动后=$($after.Count)"

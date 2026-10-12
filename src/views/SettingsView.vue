@@ -5,33 +5,20 @@ import * as api from "../api";
 import KeyCap from "../components/KeyCap.vue";
 import { useAppStore } from "../stores/app";
 
-const {
-  state: s,
-  hotkeyKeys,
-  toggleAutostart,
-  toggleRunAsAdmin,
-  showToast,
-} = useAppStore();
+const { state: s, hotkeyKeys, toggleAutostart, showToast } = useAppStore();
 
 const version = computed(() => s.snapshot?.version ?? "—");
 const autostart = computed(() => s.snapshot?.autostart ?? false);
-const runAsAdmin = computed(() => s.snapshot?.runAsAdmin ?? false);
+/**
+ * 本进程是否真的提权成功了。
+ *
+ * 程序固定尝试以管理员运行，所以这里不是「设置值」，而是「这次成没成」——
+ * 用户拒绝了 UAC、或账户本身没有管理员权限时会是 false。
+ */
 const isAdmin = computed(() => s.snapshot?.isAdmin ?? false);
-
-/** 设置与实际权限不一致：需要重启才能落实 */
-const permissionPending = computed(() => runAsAdmin.value !== isAdmin.value);
 
 async function onAutostart() {
   await toggleAutostart(!autostart.value);
-}
-
-async function onRunAsAdmin() {
-  await toggleRunAsAdmin(!runAsAdmin.value);
-}
-
-/** 设置已经写好了，只是当前进程权限不对 —— 再叫一次就会重启 */
-async function onApplyPermission() {
-  await toggleRunAsAdmin(runAsAdmin.value);
 }
 
 async function onOpenDir() {
@@ -54,43 +41,23 @@ async function onCopy(text: string, what: string) {
 
 <template>
   <section class="view">
-    <!-- ── 运行权限 ─────────────────────────────────────── -->
+    <!-- ── 运行权限（只读：程序固定以管理员运行，没有开关）───── -->
     <div class="group">
       <h2 class="label group__title">运行权限</h2>
       <div class="group__col">
         <div class="group__row">
-          <button
-            class="switch"
-            type="button"
-            role="switch"
-            :aria-checked="runAsAdmin"
-            @click="onRunAsAdmin"
-          >
-            <span
-              class="switch__track"
-              :class="{ 'switch__track--on': runAsAdmin }"
-            >
-              <span class="switch__knob"></span>
-            </span>
-            <span class="switch__text">以管理员身份运行</span>
-          </button>
-          <span class="tag mono" :class="{ 'tag--warn': permissionPending }">
-            {{ isAdmin ? "当前：管理员" : "当前：普通权限" }}
+          <span class="tag mono" :class="{ 'tag--warn': !isAdmin }">
+            {{ isAdmin ? "已以管理员身份运行" : "当前以普通权限运行" }}
           </span>
         </div>
 
-        <!-- 设置与实际不一致时，必须说清楚「为什么还没生效」并给出出路 -->
-        <p v-if="permissionPending" class="notice">
-          设置已保存，但需要重启才能生效。
-          <button class="btn btn-sm" type="button" @click="onApplyPermission">
-            立即重启
-          </button>
+        <p class="group__note">
+          本程序固定以管理员身份运行。置顶受 Windows 完整性级别限制（UIPI）：普通权限进程无法操作「以管理员身份运行」的窗口 —— 而浏览器、IDE、资源管理器往往正是这一类，所以这一项不做成可关闭的开关。
         </p>
 
-        <p class="group__note">
-          开启后可以置顶「以管理员身份运行」的程序（如任务管理器）—— 这是 Windows
-          的完整性级别限制（UIPI），普通权限进程无法操作提权窗口。代价是每次启动都会弹
-          UAC 提示。切换这个开关会重启程序。
+        <!-- 中文换行会被渲染成一个空格，所以整句写在一行里，不要中途断行 -->
+        <p v-if="!isAdmin" class="notice">
+          本次提权未成功（UAC 被拒绝，或当前账户没有管理员权限），因此无法置顶提权的窗口。重新启动程序，并在 UAC 提示中选「是」即可。
         </p>
       </div>
     </div>
@@ -113,22 +80,30 @@ async function onCopy(text: string, what: string) {
     <!-- ── 开机自启 ─────────────────────────────────────── -->
     <div class="group">
       <h2 class="label group__title">开机自启</h2>
-      <div class="group__row">
-        <button
-          class="switch"
-          type="button"
-          role="switch"
-          :aria-checked="autostart"
-          @click="onAutostart"
-        >
-          <span class="switch__track" :class="{ 'switch__track--on': autostart }">
-            <span class="switch__knob"></span>
-          </span>
-          <span class="switch__text">{{ autostart ? "已开启" : "已关闭" }}</span>
-        </button>
-        <span class="group__note"
-          >登录后自动在后台运行，只写当前用户的注册表启动项。</span
-        >
+      <div class="group__col">
+        <div class="group__row">
+          <button
+            class="switch"
+            type="button"
+            role="switch"
+            :aria-checked="autostart"
+            @click="onAutostart"
+          >
+            <span
+              class="switch__track"
+              :class="{ 'switch__track--on': autostart }"
+            >
+              <span class="switch__knob"></span>
+            </span>
+            <span class="switch__text">{{ autostart ? "已开启" : "已关闭" }}</span>
+          </button>
+          <span class="group__note">登录后自动在后台运行。</span>
+        </div>
+
+        <!-- 自启与提权是个真实的坑：注册表启动项无法自动提权 -->
+        <p v-if="autostart" class="notice notice--quiet">
+          注册表启动项无法自动提权，所以每次登录都会弹一次 UAC；选择「是」之后程序才以管理员身份重新启动。
+        </p>
       </div>
     </div>
 
@@ -184,8 +159,7 @@ async function onCopy(text: string, what: string) {
       <div class="group__row">
         <span class="mono about__ver">v{{ version }}</span>
         <span class="group__note">
-          置顶状态不写入磁盘 —— 窗口句柄重启后即失效。正常退出时程序会自动取消
-          全部置顶；若程序异常结束留下了残留，重新运行后点一次「全部取消」即可清除。
+          置顶状态不写入磁盘 —— 窗口句柄重启后即失效。正常退出时程序会自动取消全部置顶；若程序异常结束留下了残留，重新运行后点一次「全部取消」即可清除。
         </span>
       </div>
     </div>
@@ -266,6 +240,12 @@ async function onCopy(text: string, what: string) {
   padding: 8px 10px;
   border: 2px solid var(--ink);
   font-size: 12.5px;
+}
+/* 只是一条提醒、不需要动作时，退成细边框，避免和上面那条抢注意力 */
+.notice--quiet {
+  border-width: 1px;
+  border-color: var(--rule-strong);
+  color: var(--ink-3);
 }
 
 .about__ver {

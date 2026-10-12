@@ -139,29 +139,6 @@ async function toggleAutostart(enabled: boolean) {
   }
 }
 
-/**
- * 切换「是否以管理员运行」。
- *
- * 进程令牌改不了，所以这一步会重启应用：先把话说明白（后面会弹 UAC），
- * 再调命令。命令若因用户取消 UAC 而失败，设置已经落库但实际权限没变 ——
- * 界面会据此显示「设置与实际不一致」，并给一个重试入口。
- */
-async function toggleRunAsAdmin(enabled: boolean) {
-  showToast(
-    enabled
-      ? "需要以管理员身份重启，请在 UAC 提示里选择「是」"
-      : "需要以普通权限重启，程序会自动重新打开",
-  );
-  try {
-    await api.setRunAsAdmin(enabled);
-  } catch (e) {
-    state.error = String(e);
-  } finally {
-    // 若权限已经匹配，命令不会重启进程；这里刷新一次让界面回到真实状态
-    await refreshSnapshot();
-  }
-}
-
 /** 挂载时调用：先订阅后端推送，再取初始状态。
  *
  * 顺序很重要 —— 热键线程注册完会立刻推一次 pin://changed 用来上报
@@ -193,7 +170,6 @@ export function useAppStore() {
     toggle,
     unpinAll,
     toggleAutostart,
-    toggleRunAsAdmin,
     dismissError,
     showToast,
     init,

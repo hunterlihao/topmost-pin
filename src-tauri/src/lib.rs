@@ -76,54 +76,69 @@ pub fn run() {
     }
     log::write("db", format!("数据文件 {} 就绪", db_path.display()));
 
-    // ── 3) 权限切换（必须在单实例之前）────────────────────────────────────
+    // ── 3) 单实例 ─────────────────────────────────────────────────────────
+    //
+    // ★ 这一步必须在权限切换**之前**。
+    //
+    // 反过来（先切权限、再查单实例）在「默认以管理员运行」下有个很烦人的后果：
+    // 普通权限启动的进程必然发现「设置=管理员、实际=普通」，于是先弹一次 UAC；
+    // 等用户点完，新实例才发现旧实例还在，唤醒它然后退出 —— 为了把窗口调到前台，
+    // 白弹一次 UAC。而「双击图标把窗口叫出来」恰恰是最高频的操作。
+    //
+    // 先抢互斥体就完全没有这个问题：抢不到 = 已经有实例在跑，
+    // 直接唤醒它走人，权限碰都不碰。
     let marker = elevation::marker_path(&paths.data_dir);
     let relaunching = marker.exists();
     if relaunching {
         let _ = std::fs::remove_file(&marker);
     }
 
-    let is_admin = elevation::is_elevated();
-    let want_admin = db.get_bool(db::keys::RUN_AS_ADMIN, false);
-    log::write(
-        "app",
-        format!("权限：设置={want_admin} 实际={is_admin} 本次是重启={relaunching}"),
-    );
-
-    if !relaunching && want_admin != is_admin {
-        let now = db::now_ms();
-        let last = db.get_i64(db::keys::LAST_SWITCH_AT, 0);
-        if now - last > SWITCH_COOLDOWN_MS {
-            let _ = db.set_i64(db::keys::LAST_SWITCH_AT, now);
-            // 标记必须先落盘再启动新实例：新实例靠它判断「我是一次权限切换」
-            let _ = std::fs::write(&marker, if want_admin { "admin" } else { "user" });
-            match elevation::relaunch(want_admin) {
-                Ok(()) => {
-                    log::write(
-                        "app",
-                        format!(
-                            "已发起重启（目标：{}），本进程退出以释放单实例互斥体",
-                            if want_admin { "管理员" } else { "普通权限" }
-                        ),
-                    );
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    let _ = std::fs::remove_file(&marker);
-                    log::write("app", format!("重启失败，继续以当前权限运行：{e}"));
-                }
-            }
-        } else {
-            log::write("app", "冷却期内，跳过本次权限切换以免反复弹 UAC");
-        }
-    }
-
-    // ── 4) 单实例 ─────────────────────────────────────────────────────────
     let Some(_guard) = single_instance::acquire(relaunching) else {
         log::write("app", "已有实例在运行，唤醒它之后退出");
         single_instance::signal_existing();
         std::process::exit(0);
     };
+
+    // ── 4) 提权 ───────────────────────────────────────────────────────────
+    //
+    // 程序**固定**以管理员身份运行，不做成可选项。
+    //
+    // 置顶受 Windows 的 UIPI 限制：非提权进程对提权窗口调用 SetWindowPos 只会拿到
+    // ERROR_ACCESS_DENIED(5)。而浏览器 / IDE / 资源管理器这些最常想置顶的对象，
+    // 往往正是提权跑起来的（本机实测 chrome / msedge / idea64 / explorer / QQ 都是）。
+    // 做成选项的话，默认那一侧在最需要它的场景下恰好用不了 —— 那就不该是选项。
+    //
+    // 提权失败（UAC 被拒 / 账户本身无管理员权限）不阻断启动：继续以当前权限运行，
+    // 设置页会说明为什么有些窗口置顶不了。`--no-elevate` 可显式跳过本次提权。
+    let is_admin = elevation::is_elevated();
+    log::write("app", format!("权限：已提权={is_admin} 本次是重启={relaunching}"));
+
+    let no_elevate = std::env::args().any(|a| a == "--no-elevate");
+    if no_elevate {
+        log::write("app", "命令行指定 --no-elevate，本次不尝试提权");
+    }
+
+    if !relaunching && !no_elevate && !is_admin {
+        let now = db::now_ms();
+        let last = db.get_i64(db::keys::LAST_SWITCH_AT, 0);
+        if now - last > SWITCH_COOLDOWN_MS {
+            let _ = db.set_i64(db::keys::LAST_SWITCH_AT, now);
+            // 标记必须先落盘再启动新实例：新实例靠它判断「我是一次提权重启」
+            let _ = std::fs::write(&marker, "admin");
+            match elevation::relaunch_elevated() {
+                Ok(()) => {
+                    log::write("app", "已发起提权重启，本进程退出以释放单实例互斥体");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&marker);
+                    log::write("app", format!("提权失败，继续以普通权限运行：{e}"));
+                }
+            }
+        } else {
+            log::write("app", "冷却期内，跳过本次提权以免反复弹 UAC");
+        }
+    }
 
     // ── 5) 启动动画 ───────────────────────────────────────────────────────
     // ★ 必须在 tauri::Builder 之前。这正是把动画写成原生 GDI 窗口的原因：
@@ -141,7 +156,6 @@ pub fn run() {
             commands::unpin_all,
             commands::get_snapshot,
             commands::set_autostart,
-            commands::set_run_as_admin,
             commands::main_ready,
             commands::open_data_dir,
             commands::hide_to_tray,

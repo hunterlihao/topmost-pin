@@ -30,15 +30,6 @@ export const setAutostart = (enabled: boolean) =>
   invoke<boolean>("set_autostart", { enabled });
 
 /**
- * 设置「是否以管理员运行」。
- *
- * 进程令牌无法在运行时更改，所以权限与当前不一致时这个命令会**重启应用**，
- * 调用后当前进程随即退出 —— 前端不必等待它的返回。
- */
-export const setRunAsAdmin = (enabled: boolean) =>
-  invoke<boolean>("set_run_as_admin", { enabled });
-
-/**
  * 前端画好第一帧后调用：收起启动动画、放出主窗口。
  *
  * 由前端主动报告，而不是后端定时显示 —— 后端无从知道 WebView 什么时候

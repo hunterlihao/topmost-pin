@@ -121,9 +121,4 @@ impl AppState {
     }
 
     /* ── 设置 ─────────────────────────────────────────────── */
-
-    pub fn run_as_admin(&self) -> bool {
-        self.db
-            .get_bool(crate::db::keys::RUN_AS_ADMIN, false)
-    }
 }

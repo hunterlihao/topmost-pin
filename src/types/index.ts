@@ -24,9 +24,12 @@ export interface Snapshot {
   hotkeyActive: boolean;
   /** 是否已设置开机自启（以注册表实际读到的为准） */
   autostart: boolean;
-  /** 设置值：希望以什么权限运行 */
-  runAsAdmin: boolean;
-  /** 实际值：本进程当前是否已是管理员。与 runAsAdmin 不一致时需重启才能生效 */
+  /**
+   * 本进程当前是否已是管理员。
+   *
+   * 程序固定尝试以管理员运行，但提权可能失败（UAC 被拒、账户无管理员权限），
+   * 那种情况下界面要说明「为什么有些窗口置顶不了」。
+   */
   isAdmin: boolean;
   /** 数据是否落在 exe 同目录（true = 真便携） */
   portable: boolean;

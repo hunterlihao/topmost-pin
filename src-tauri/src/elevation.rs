@@ -63,44 +63,29 @@ fn shell_result(r: isize, action: &str) -> AppResult<()> {
     )))
 }
 
-/// 以目标权限重启自己。
+/// 以管理员身份重启自己。
+///
+/// ★ 这里**没有**「降权重启」那条路径了。曾经有过 —— 设置页有个权限开关，
+/// 可以切回普通权限（走 explorer.exe，因为它运行在中完整性级别，子进程自然也是）。
+/// 后来权限改成固定管理员运行、开关删掉，那条分支就成了永远走不到的死代码。
+/// 死代码最坏的地方不是浪费，而是**让人以为那个能力还在**，所以一并删掉。
 ///
 /// 调用方应当在成功后立即退出进程：单实例互斥体要尽早释放，新实例才能接手。
-pub fn relaunch(target_admin: bool) -> AppResult<()> {
+pub fn relaunch_elevated() -> AppResult<()> {
     let exe = std::env::current_exe()?;
     let exe_w = path_to_wide(&exe);
-
-    if target_admin {
-        let verb = to_wide("runas");
-        let r = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                verb.as_ptr(),
-                exe_w.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                SW_SHOWNORMAL,
-            )
-        } as isize;
-        shell_result(r, "以管理员身份重启")
-    } else {
-        // 降权：交给 explorer.exe 启动。它在中完整性级别运行，
-        // 其子进程也就是中完整性 —— 这是没有专用 API 时最可靠的做法。
-        let explorer = to_wide("explorer.exe");
-        // explorer 的命令行参数必须是带引号的完整路径，否则含空格的路径会被拆开
-        let params = to_wide(&format!("\"{}\"", exe.display()));
-        let r = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                explorer.as_ptr(),
-                params.as_ptr(),
-                std::ptr::null(),
-                SW_SHOWNORMAL,
-            )
-        } as isize;
-        shell_result(r, "以普通权限重启")
-    }
+    let verb = to_wide("runas");
+    let r = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            exe_w.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    shell_result(r, "以管理员身份重启")
 }
 
 /// 重启握手用的标记文件路径。
