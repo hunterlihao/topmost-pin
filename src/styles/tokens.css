@@ -3,38 +3,59 @@
  * 见 docs/design.md。核心机制：整套配色只有「纸」与「墨」两级，
  * 「置顶」这个 z 序状态用【值反转】表达 —— 反相即抬升。
  * 因此这里没有任何色相，语义全部由明度、字重、粗细、填充/描边承担。
+ *
+ * 本轮改版新增的第二套明度：台面（deck）。
+ * 反相之后墨面上的文字需要**另一组**中性值（= 纸面那三级的镜像），
+ * 否则直接在墨面上用 --ink-2 / --ink-3 会黑底黑字。
  */
 
 :root {
   /* ── 面 ─────────────────────────────────────────── */
-  --paper: #ffffff; /* 画布 */
-  --well: #f4f4f4; /* 凹陷面：搜索框、键帽、表头 */
-  --well-hover: #ebebeb;
+  --paper: #ffffff; /* 画布 / 下层平面 */
+  --well: #f2f2f2; /* 凹陷面：搜索框、键帽、数据路径 */
+  --well-hover: #e8e8e8;
 
-  /* ── 墨（三级文字 + 置顶行填充）─────────────────── */
-  --ink: #0a0a0a; /* 主文字 兼 反相底色 */
+  /* ── 墨（纸面上的三级文字 + 台面底色）───────────── */
+  --ink: #0a0a0a; /* 主文字 兼 台面填充 */
   --ink-2: #4a4a4a; /* 次级文字 */
   --ink-3: #8c8c8c; /* 三级文字 / 禁用 */
-  --ink-4: #b8b8b8; /* 极弱：占位符、字形描边 */
+  --ink-4: #b9b9b9; /* 极弱：占位符、句柄、字形描边 */
 
   /* ── 线 ─────────────────────────────────────────── */
-  --rule: #e3e3e3; /* 发丝分隔线 */
-  --rule-strong: #c9c9c9; /* 交互对象描边 */
+  --rule: #e4e4e4; /* 发丝分隔线 */
+  --rule-strong: #c8c8c8; /* 交互对象描边 */
 
-  /* 反相上下文中的前景（= 纸） */
+  /* ── 台面（反相上下文）───────────────────────────
+   * 对应纸面的 ink / ink-2 / ink-3 / rule，逐级镜像。
+   * 对比度（对 #0a0a0a）：on-ink 19.3:1、on-ink-2 8.3:1、on-ink-3 5.0:1，均达 AA。 */
   --on-ink: #ffffff;
-  --on-ink-muted: #b8b8b8;
+  --on-ink-2: #a8a8a8;
+  --on-ink-3: #808080;
+  --deck-line: #2c2c2c; /* 台面内部发丝线 */
+  --deck-hover: #1c1c1c;
+
+  /* ── 空位斜线 ─────────────────────────────────────
+   * 「预留、尚未占用」在单色下的表达：工程制图与印刷里表示待填区域的老约定。
+   * 不引入色相，也不与任何状态色冲突 —— 因为这套设计里根本没有状态色。 */
+  --hatch: rgba(10, 10, 10, 0.07);
 
   /* ── 几何 ───────────────────────────────────────── */
   --radius-object: 2px; /* 交互对象才有圆角 */
-  --radius-structure: 0; /* 结构元素（行、线）没有 */
+  --radius-structure: 0; /* 结构元素（行、线、平面）没有 */
 
-  /* ── 字体 ───────────────────────────────────────── */
-  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  /* ── 字体 ─────────────────────────────────────────
+   * ★ 界面全中文 + 离线构建（CSP 禁外部字体）= 只能用系统已装字体。
+   *   而中文字面的选择余地几乎为零（Windows 上可用的无衬线只有雅黑一套能看，
+   *   宋体在小字号下点阵感重且没有真粗体，合成粗体发糊）。所以字体的个性
+   *   不放在「标题用什么衬线」，而放在【等宽字面的领地上】：凡是机器数据
+   *   —— 进程名、窗口类名、HWND、热键、路径、计数 —— 一律走等宽。
+   *   这一条是本设计唯一的字体主张，也是它区别于「全程 Segoe UI 的 Windows 小工具」之处。 */
+  --font-display: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI",
+    "Microsoft YaHei", system-ui, sans-serif;
   --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
     "Microsoft YaHei", system-ui, sans-serif;
-  --font-data: "Cascadia Mono", Consolas, "Microsoft YaHei UI", ui-monospace,
-    monospace;
+  --font-data: "Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei UI",
+    ui-monospace, monospace;
 
   /* ── 唯一的一层阴影，仅用于浮层 ─────────────────── */
   --shadow-float: 0 8px 24px rgba(10, 10, 10, 0.12);

@@ -1,5 +1,8 @@
-/* 设计令牌由 main.ts 显式导入（在 main.css 之前）。
-   这里**不要**再 @import 一次 —— 那样打包出来的 CSS 里 :root 令牌块会出现两份。 */
+/* 全局基元。设计令牌由 main.ts 显式导入（在 main.css 之前）。
+   这里**不要**再 @import 一次 —— 那样打包出来的 CSS 里 :root 令牌块会出现两份。
+
+   约定：这里只放**跨组件复用**的东西。只在某一处成立的样式留在那个组件的
+   scoped 块里 —— scoped 是防止选择器互相抵消的第一道防线，能不出全局就不出全局。 */
 
 * {
   box-sizing: border-box;
@@ -48,17 +51,29 @@ button {
   outline-offset: 2px;
 }
 
+/* 反相上下文里的焦点环要反过来，否则墨色描边落在墨面上等于没有 */
+.deck :focus-visible,
+.on-ink :focus-visible {
+  outline-color: var(--on-ink);
+}
+
+/* ── 等宽 = 机器数据的领地 ───────────────────────────
+   本设计唯一的字体主张：凡是「机器给出的标识符」都走等宽。
+   等宽让这一列能逐字符对齐、能竖着扫读，是功能而非风格。 */
+
 .mono {
   font-family: var(--font-data);
   font-variant-numeric: tabular-nums;
 }
 
-/* 小标签：分区标题、列头 */
-.label {
+/* ── 分区眉标 ───────────────────────────────────────
+   中文没有大小写，所以「大写 + 字距」这套眉标手法只有一半可用：
+   靠字距和字重区分层级，靠墨色深浅区分主次。 */
+
+.eyebrow {
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  letter-spacing: 0.12em;
   color: var(--ink-3);
 }
 
@@ -78,7 +93,7 @@ button {
   font-size: 13px;
   white-space: nowrap;
   transition: background var(--dur) var(--ease),
-    border-color var(--dur) var(--ease);
+    border-color var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 .btn:hover:not(:disabled) {
   background: var(--well);
@@ -87,7 +102,7 @@ button {
   background: var(--well-hover);
 }
 .btn:disabled {
-  color: var(--ink-3);
+  color: var(--ink-4);
   border-color: var(--rule);
   cursor: not-allowed;
 }
@@ -146,7 +161,9 @@ button {
   box-shadow: 0 0 0 3px var(--well);
 }
 
-/* ── 键帽：把热键画成一个真实物体 ─────────────────── */
+/* ── 键帽：把热键画成一个真实物体 ───────────────────
+   它同时是一句说明和一个可记忆的物体 —— 说「Ctrl+Alt+P」是符号，
+   画成三枚键帽才是那个动作本身。 */
 
 .kbd {
   display: inline-flex;
@@ -195,6 +212,27 @@ button {
   background: var(--well);
 }
 .seg > button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+/* ── 状态标签（只读，不是控件）───────────────────── */
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-object);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+/* 异常态：反相。整个界面没有红色可用，所以「坏消息」只能靠反相 + 边框重量 */
+.tag--alert {
+  border-color: var(--ink);
   background: var(--ink);
   color: var(--on-ink);
 }
