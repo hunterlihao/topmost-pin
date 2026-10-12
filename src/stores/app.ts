@@ -139,6 +139,25 @@ async function toggleAutostart(enabled: boolean) {
   }
 }
 
+/**
+ * 修改全局热键。
+ *
+ * 成功返回 null，失败返回**给用户看的原因** —— 调用方是设置页，用户人就在
+ * 那个输入位置旁边，把原因显示在那里比丢进全局错误条有用得多。
+ */
+async function rebindHotkey(combo: string): Promise<string | null> {
+  try {
+    const effective = await api.setHotkey(combo);
+    if (state.snapshot) {
+      state.snapshot.hotkey = effective;
+      state.snapshot.hotkeyActive = true;
+    }
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+}
+
 /** 挂载时调用：先订阅后端推送，再取初始状态。
  *
  * 顺序很重要 —— 热键线程注册完会立刻推一次 pin://changed 用来上报
@@ -170,6 +189,7 @@ export function useAppStore() {
     toggle,
     unpinAll,
     toggleAutostart,
+    rebindHotkey,
     dismissError,
     showToast,
     init,

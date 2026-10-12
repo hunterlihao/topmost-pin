@@ -103,6 +103,15 @@ pub fn set_autostart(enabled: bool) -> AppResult<bool> {
     Ok(crate::autostart::is_enabled())
 }
 
+/// 修改全局热键，返回**实际生效**的文案。
+///
+/// 失败（组合已被占用、写法不合法）时错误信息直接给用户看，原热键保持不变。
+#[tauri::command]
+pub fn set_hotkey(state: State<'_, AppState>, combo: String) -> AppResult<String> {
+    crate::log::write("cmd", format!("set_hotkey({combo})"));
+    state.rebind_hotkey(&combo)
+}
+
 /// 前端画好第一帧后调用：收起启动动画、放出主窗口。
 ///
 /// 由前端主动调用，而不是 Rust 定时显示 —— Rust 无从知道 WebView 什么时候

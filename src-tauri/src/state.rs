@@ -5,7 +5,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::db::Db;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::hotkey::HotkeyHandle;
 use crate::pin::PinManager;
 use crate::portable::PortablePaths;
@@ -118,6 +118,31 @@ impl AppState {
         if let Some(h) = self.hotkey.lock().as_ref() {
             h.stop();
         }
+    }
+
+    /// 热键线程是否已经可以接受换键请求
+    pub fn hotkey_ready(&self) -> bool {
+        self.hotkey
+            .lock()
+            .as_ref()
+            .map(|h| h.is_ready())
+            .unwrap_or(false)
+    }
+
+    /// 换一个全局热键，返回实际生效的文案。
+    ///
+    /// 注册只能在热键线程上做（见 hotkey.rs 模块头：`WM_HOTKEY` 是线程消息），
+    /// 这里只是转发并等结果。
+    ///
+    /// ★ 先把 `Arc` 取出来再放锁：`rebind` 会阻塞到线程回执为止（最长几秒），
+    /// 攥着锁等会让这段时间里的 `hotkey_display()` 一起卡住 —— 而界面正好会在这时
+    /// 刷新快照，那就成了一个自己等自己的死结。
+    pub fn rebind_hotkey(&self, combo: &str) -> AppResult<String> {
+        let handle = self.hotkey.lock().clone();
+        let Some(handle) = handle else {
+            return Err(AppError::msg("热键尚未启动"));
+        };
+        handle.rebind(combo.to_string())
     }
 
     /* ── 设置 ─────────────────────────────────────────────── */

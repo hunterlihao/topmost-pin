@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 
 import * as api from "../api";
 import KeyCap from "../components/KeyCap.vue";
 import { useAppStore } from "../stores/app";
 
-const { state: s, hotkeyKeys, toggleAutostart, showToast } = useAppStore();
+const { state: s, hotkeyKeys, toggleAutostart, rebindHotkey, showToast } =
+  useAppStore();
 
 const version = computed(() => s.snapshot?.version ?? "—");
 const autostart = computed(() => s.snapshot?.autostart ?? false);
@@ -20,6 +21,92 @@ const isAdmin = computed(() => s.snapshot?.isAdmin ?? false);
 async function onAutostart() {
   await toggleAutostart(!autostart.value);
 }
+
+/* ── 热键录制 ────────────────────────────────────────────────────────── */
+
+const recording = ref(false);
+const hotkeyError = ref("");
+let recordHintTimer: number | undefined;
+
+function startRecording() {
+  hotkeyError.value = "";
+  recording.value = true;
+  // 捕获阶段监听：抢在 WebView 自己的快捷键（Ctrl+R 之类）之前拿到按键
+  window.addEventListener("keydown", onRecordKey, true);
+  // ★ 已被系统/其它程序注册的组合，会被系统在窗口收到 keydown **之前**截走。
+  // 用户按了没反应只会以为坏了，所以过一会儿主动解释一句。
+  recordHintTimer = window.setTimeout(() => {
+    if (recording.value) {
+      hotkeyError.value =
+        "还没收到按键。如果这个组合已被其它程序注册，系统会先把它截走、本程序收不到，换一个试试。";
+    }
+  }, 2500);
+}
+
+function stopRecording() {
+  recording.value = false;
+  window.removeEventListener("keydown", onRecordKey, true);
+  if (recordHintTimer) {
+    window.clearTimeout(recordHintTimer);
+    recordHintTimer = undefined;
+  }
+}
+
+/** 从键盘事件取出主键名。只按了修饰键、或键位不受支持时返回 null。 */
+function keyNameOf(e: KeyboardEvent): string | null {
+  const code = e.code;
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  return null;
+}
+
+function onRecordKey(e: KeyboardEvent) {
+  // 录制的含义就是「这一下按键归我」，所以要吃掉默认行为
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (e.key === "Escape") {
+    stopRecording();
+    return;
+  }
+
+  const key = keyNameOf(e);
+  if (!key) {
+    // 只按了修饰键就继续等主键，不打断录制；按了别的键才值得报错
+    if (!e.ctrlKey && !e.altKey && !e.shiftKey) {
+      hotkeyError.value = "这个按键不支持，主键请用字母、数字或 F1–F24";
+    }
+    return;
+  }
+
+  const parts: string[] = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  if (parts.length === 0) {
+    hotkeyError.value = "热键至少要带一个修饰键（Ctrl / Alt / Shift）";
+    return;
+  }
+  parts.push(key);
+
+  const combo = parts.join("+");
+  stopRecording();
+  void applyHotkey(combo);
+}
+
+async function applyHotkey(combo: string) {
+  const reason = await rebindHotkey(combo);
+  if (reason) {
+    // 失败时后端已经把原热键装回去了，这里只需把原因说清楚
+    hotkeyError.value = reason;
+    return;
+  }
+  hotkeyError.value = "";
+  showToast(`热键已改为 ${combo}`);
+}
+
+onUnmounted(stopRecording);
 
 async function onOpenDir() {
   try {
@@ -65,15 +152,33 @@ async function onCopy(text: string, what: string) {
     <!-- ── 热键 ─────────────────────────────────────────── -->
     <div class="group">
       <h2 class="label group__title">热键</h2>
-      <div class="group__row">
-        <KeyCap :keys="hotkeyKeys" :off="!s.snapshot?.hotkeyActive" />
-        <span class="group__note">
-          {{
-            s.snapshot?.hotkeyActive
-              ? "指向任意窗口按下即可置顶，再按一次取消。"
-              : "候选组合都被其它程序占用，当前未生效。界面仍可正常置顶。"
-          }}
-        </span>
+      <div class="group__col">
+        <!-- 录制中：接管键盘，按下组合键即生效 -->
+        <div v-if="recording" class="group__row">
+          <span class="recorder mono">请按下新的组合键…</span>
+          <button class="btn btn-sm" type="button" @click="stopRecording">
+            取消
+          </button>
+        </div>
+
+        <div v-else class="group__row">
+          <KeyCap :keys="hotkeyKeys" :off="!s.snapshot?.hotkeyActive" />
+          <button class="btn btn-sm" type="button" @click="startRecording">
+            修改
+          </button>
+          <span class="group__note">
+            {{
+              s.snapshot?.hotkeyActive
+                ? "指向任意窗口按下即可置顶，再按一次取消。"
+                : "当前没有可用的热键，界面仍可正常置顶。"
+            }}
+          </span>
+        </div>
+
+        <p v-if="hotkeyError" class="notice">{{ hotkeyError }}</p>
+        <p v-else-if="recording" class="group__note">
+          必须带至少一个修饰键（Ctrl / Alt / Shift），主键支持字母、数字与 F1–F24；按 Esc 取消。
+        </p>
       </div>
     </div>
 
@@ -229,6 +334,28 @@ async function onCopy(text: string, what: string) {
   border-color: var(--ink);
   background: var(--ink);
   color: var(--on-ink);
+}
+
+/* 录制态：反白块，明确「现在键盘归我」。
+   轻微闪烁是给「正在等你按键」的状态感，不是装饰。 */
+.recorder {
+  padding: 3px 10px;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-object);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: 12px;
+  animation: recorder-blink 1.1s steps(2, end) infinite;
+}
+@keyframes recorder-blink {
+  50% {
+    opacity: 0.7;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .recorder {
+    animation: none;
+  }
 }
 
 /* 设置已保存但需重启时的提示条 */

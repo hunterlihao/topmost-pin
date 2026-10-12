@@ -30,6 +30,15 @@ export const setAutostart = (enabled: boolean) =>
   invoke<boolean>("set_autostart", { enabled });
 
 /**
+ * 修改全局热键，返回**实际生效**的文案。
+ *
+ * 组合被占用、写法不合法都会抛错（错误信息本身就是给用户看的），
+ * 并且**原热键保持不变** —— 后端会在注册失败时把它装回去。
+ */
+export const setHotkey = (combo: string) =>
+  invoke<string>("set_hotkey", { combo });
+
+/**
  * 前端画好第一帧后调用：收起启动动画、放出主窗口。
  *
  * 由前端主动报告，而不是后端定时显示 —— 后端无从知道 WebView 什么时候

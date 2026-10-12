@@ -156,6 +156,7 @@ pub fn run() {
             commands::unpin_all,
             commands::get_snapshot,
             commands::set_autostart,
+            commands::set_hotkey,
             commands::main_ready,
             commands::open_data_dir,
             commands::hide_to_tray,
@@ -186,6 +187,14 @@ pub fn run() {
             app.manage(state);
 
             spawn_ready_watchdog(handle.clone());
+
+            // --set-hotkey=Ctrl+Alt+K：启动时套用指定热键。
+            // 给脚本化部署用（装完直接配好，不用点界面），同时它也是这条
+            // 「命令 -> 热键线程 -> 注册」链路唯一能被自动验证的入口。
+            if let Some(combo) = requested_hotkey() {
+                let h = handle.clone();
+                std::thread::spawn(move || apply_requested_hotkey(h, combo));
+            }
 
             // 托盘与热键
             tray::setup(app)?;
@@ -224,6 +233,47 @@ pub fn run() {
             }
         }
     });
+}
+
+/// 解析 `--set-hotkey=Ctrl+Alt+K`
+fn requested_hotkey() -> Option<String> {
+    std::env::args().find_map(|a| {
+        a.strip_prefix("--set-hotkey=")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    })
+}
+
+/// 等热键线程就绪，然后套用命令行指定的热键。
+///
+/// 走的是和界面「修改」按钮**完全相同**的那条路径（`AppState::rebind_hotkey`
+/// → `HotkeyHandle::rebind` → 投线程消息 → 热键线程注册）。
+/// 所以它能验证的正是界面那条链路，包括跨线程投消息与回执。
+fn apply_requested_hotkey(app: tauri::AppHandle, combo: String) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        // 换键请求要等线程把消息队列建好，否则 PostThreadMessage 会失败
+        if app
+            .try_state::<AppState>()
+            .map(|s| s.hotkey_ready())
+            .unwrap_or(false)
+        {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            log::write("app", "--set-hotkey：热键线程迟迟未就绪，放弃");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    match state.rebind_hotkey(&combo) {
+        Ok(label) => log::write("app", format!("--set-hotkey 已生效：{label}")),
+        Err(e) => log::write("app", format!("--set-hotkey 失败：{e}")),
+    }
 }
 
 /// 兜底：前端万一始终没有报告就绪（脚本出错、资源没加载上……），
