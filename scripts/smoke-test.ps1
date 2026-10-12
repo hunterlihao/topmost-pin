@@ -53,6 +53,22 @@ function Check($name, $ok, $detail) {
     }
 }
 
+# 采样一张 PNG 的颜色数。用来判断「是不是一片白」——
+# 白屏的采样结果就是 1 种颜色。
+function Get-PngColors {
+    param([string]$Path)
+    $bmp = [System.Drawing.Bitmap]::new($Path)
+    $set = @{}
+    for ($y = 0; $y -lt $bmp.Height; $y += 4) {
+        for ($x = 0; $x -lt $bmp.Width; $x += 4) {
+            $c = $bmp.GetPixel($x, $y)
+            $set['{0},{1},{2}' -f $c.R, $c.G, $c.B] = 1
+        }
+    }
+    $bmp.Dispose()
+    return $set.Count
+}
+
 # ── PE 子系统 ────────────────────────────────────────────────────────────
 # Windows 的 GUI 子系统 = 2，Console = 3。gui 构建不会附加控制台窗口。
 function Get-PeSubsystem([string]$Path) {
@@ -122,14 +138,19 @@ public class WinCap {
         return result;
     }
 
-    /// 按标题找**面积最大**的可见窗口。
+    /// 在**指定进程**里按标题找面积最大的可见窗口。
     ///
-    /// 不能只取第一个匹配：启动动画窗与主窗口标题相同，过渡瞬间两个都可能可见，
-    /// 取到动画窗的话会得到一个小矩形甚至 0x0，截图判据就失去意义了。
-    public static IntPtr FindLargestByTitle(string needle) {
+    /// 两个限定都必要：
+    ///   · 按 pid 限定 —— 标题里含「窗口置顶助手」的窗口不止主窗口一个，
+    ///     资源管理器开在这个目录下时，文件夹窗口的标题就长这样，
+    ///     它比主窗口还大，会被误当成主窗口（实测把主窗口量成了 2558x1526）。
+    ///   · 取面积最大 —— 启动动画窗与主窗口同名，过渡瞬间两个都可能可见。
+    public static IntPtr FindLargestByTitle(int pid, string needle) {
         IntPtr best = IntPtr.Zero;
         long bestArea = 0;
         EnumWindows((h, l) => {
+            uint p; GetWindowThreadProcessId(h, out p);
+            if (p != (uint)pid) return true;
             if (!IsWindowVisible(h)) return true;
             var t = new StringBuilder(512); GetWindowTextW(h, t, 512);
             if (!t.ToString().Contains(needle)) return true;
@@ -240,20 +261,28 @@ try {
     $proc = Start-Process -FilePath $ExePath -PassThru
 
     # ── 抓启动动画 ────────────────────────────────────────────────────────
-    # 动画窗只存在约 1.5 秒，必须在它活着的时候截下来。
-    # 注意「窗口出现」不等于「内容画好」：WebView2 首帧要晚几百毫秒，
-    # 所以这里持续重拍到窗口消失，**保留最后一帧** —— 那正是动画的完整状态。
+    # 动画窗是**原生 GDI 窗口**（类名 TopMostPinSplash），不是 Tauri 窗口 ——
+    # 用它正是为了在 Tauri/WebView2 起来之前就能显示第一帧。
+    #
+    # 这里要抓两张：
+    #   splash-first.png  窗口出现后**第一帧**。它是「有没有白屏」的直接证据 ——
+    #                     第一版用 WebView 时这张会是一片白。
+    #   splash.png        窗口消失前最后一帧（动画的完整状态）。
     $splashShot = $null
+    $splashFirst = $null
     $sw = [IntPtr]::Zero
     $deadline = (Get-Date).AddSeconds(8)
     while ((Get-Date) -lt $deadline -and $sw -eq [IntPtr]::Zero) {
-        $sw = [WinCap]::FindSmallWindow($proc.Id, 'Tauri Window', 900, 480)
-        if ($sw -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 70 }
+        $sw = [WinCap]::FindSmallWindow($proc.Id, 'TopMostPinSplash', 900, 480)
+        if ($sw -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 40 }
     }
 
     if ($sw -ne [IntPtr]::Zero) {
+        $shotFirst = Join-Path $OutDir 'splash-first.png'
         $candidate = Join-Path $OutDir 'splash.png'
-        $until = (Get-Date).AddSeconds(5)
+        if (Save-WindowPng -Hwnd $sw -Path $shotFirst) { $splashFirst = $shotFirst }
+
+        $until = (Get-Date).AddSeconds(6)
         while ((Get-Date) -lt $until) {
             Start-Sleep -Milliseconds 140
             try {
@@ -266,6 +295,13 @@ try {
     }
     Check '启动动画窗口出现过并被截下' ($null -ne $splashShot) $(if ($splashShot) { $splashShot } else { '8 秒内没抓到' })
 
+    # ★ 关键判据：第一帧就必须有内容。用 WebView 画启动画面时窗口一显示就是白的，
+    #   用户看到「先白屏、再出动画」。这里直接对第一帧采样，白屏会露出马脚。
+    if ($splashFirst) {
+        $firstColors = Get-PngColors $splashFirst
+        Check '启动动画第一帧就有内容（无白屏）' ($firstColors -gt 1) "采样到 $firstColors 种颜色"
+    }
+
     Start-Sleep -Seconds 8
 
     Check '进程存活' (-not $proc.HasExited) "pid=$($proc.Id)"
@@ -275,7 +311,7 @@ try {
     foreach ($w in $wins) { Write-Host "      $w" }
 
     # 启动动画窗与主窗口同名，取面积最大的那个才是主窗口
-    $hwnd = [WinCap]::FindLargestByTitle($WindowTitle)
+    $hwnd = [WinCap]::FindLargestByTitle($proc.Id, $WindowTitle)
     Check '主窗口已创建' ($hwnd -ne [IntPtr]::Zero) ("hwnd=0x{0:X}" -f $hwnd.ToInt64())
     # 直接查有没有 ConsoleWindowClass，比只看 PE 子系统更贴近「用户会不会看到黑窗」
     Check '不存在控制台窗口' (-not [WinCap]::HasConsoleWindow($proc.Id))
@@ -310,8 +346,17 @@ try {
     $logPath = Join-Path $dataDir 'topmost-pin.log'
     if (Test-Path $logPath) {
         $logText = Get-Content $logPath -Raw
-        Check '启动动画已收尾并放出主窗口' ($logText -match '启动动画结束') 
-        Check '权限状态已判定并记录' ($logText -match '权限：设置=') 
+        Check '前端就绪后启动动画收尾、主窗口显示' ($logText -match '前端已就绪')
+        Check '权限状态已判定并记录' ($logText -match '权限：设置=')
+
+        # ★ 这是本轮修复的验收点：启动动画必须在 Tauri/WebView2 起来之前就显示。
+        #   第一版用 WebView 画启动画面，窗口出现时已经过了 1.5 秒，且先是一片白。
+        if ($logText -match '原生启动动画已显示[^\n]*耗时 (\d+)ms') {
+            $ms = [int]$Matches[1]
+            Check '启动动画在 500ms 内就已显示（不等 WebView2）' ($ms -lt 500) "$ms ms"
+        } else {
+            Check '启动动画在 500ms 内就已显示（不等 WebView2）' $false '日志里没有耗时记录'
+        }
     } else {
         Check '应用日志已生成' $false $logPath
     }
@@ -331,7 +376,7 @@ try {
     $w = 0
     $h = 0
     for ($i = 0; $i -lt 30; $i++) {
-        $cand = [WinCap]::FindLargestByTitle($WindowTitle)
+        $cand = [WinCap]::FindLargestByTitle($proc.Id, $WindowTitle)
         if ($cand -ne [IntPtr]::Zero) {
             [void][WinCap]::GetWindowRect($cand, [ref]$r)
             $w = $r.Right - $r.Left

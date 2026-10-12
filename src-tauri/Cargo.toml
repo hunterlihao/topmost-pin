@@ -42,6 +42,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     # ShellExecuteW（提权/降权重启）、IsUserAnAdmin
     "Win32_UI_Shell",
+    # GetDpiForSystem：启动动画是原生窗口，尺寸得自己按 DPI 算
+    "Win32_UI_HiDpi",
+    # 启动动画用 GDI 直接画（不能用 WebView，理由见 src/splash.rs）
+    "Win32_Graphics_Gdi",
     # GetTokenInformation + TOKEN_ELEVATION（判断当前是否管理员）
     "Win32_Security",
     "Win32_System_Threading",

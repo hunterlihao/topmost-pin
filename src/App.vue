@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from "vue";
 
+import * as api from "./api";
 import ErrorStrip from "./components/ErrorStrip.vue";
 import KeyCap from "./components/KeyCap.vue";
 import SettingsView from "./views/SettingsView.vue";
@@ -28,6 +29,15 @@ function onFocus() {
 }
 
 onMounted(async () => {
+  // 等第一帧真的画出来再通知后端显示主窗口。
+  // 用两级 requestAnimationFrame：第一级在绘制前触发，第二级才落在首次绘制之后。
+  // 少了这一步，主窗口会先以白底暴露一瞬。
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      void api.mainReady();
+    });
+  });
+
   await init();
   window.addEventListener("focus", onFocus);
   timer = window.setInterval(() => {

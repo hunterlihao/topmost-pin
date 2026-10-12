@@ -27,6 +27,8 @@ pub mod state;
 pub mod tray;
 pub mod winapi;
 
+use std::time::Duration;
+
 use tauri::{Manager, WebviewWindowBuilder};
 
 use crate::db::Db;
@@ -123,7 +125,13 @@ pub fn run() {
         std::process::exit(0);
     };
 
-    // ── 5) Tauri 装配 ─────────────────────────────────────────────────────
+    // ── 5) 启动动画 ───────────────────────────────────────────────────────
+    // ★ 必须在 tauri::Builder 之前。这正是把动画写成原生 GDI 窗口的原因：
+    //   WebView2 初始化要 1～1.5 秒，用 WebView 画启动画面只会先给用户一个白屏。
+    //   原生窗口在进程启动后几十毫秒就能显示第一帧动画。
+    splash::start();
+
+    // ── 6) Tauri 装配 ─────────────────────────────────────────────────────
     let state = AppState::new(paths, db, is_admin);
 
     let app = tauri::Builder::default()
@@ -134,7 +142,7 @@ pub fn run() {
             commands::get_snapshot,
             commands::set_autostart,
             commands::set_run_as_admin,
-            commands::finish_splash,
+            commands::main_ready,
             commands::open_data_dir,
             commands::hide_to_tray,
             commands::quit_app,
@@ -144,23 +152,9 @@ pub fn run() {
             std::fs::create_dir_all(&cache_dir)?;
             let handle = app.handle().clone();
 
-            // ★ 启动动画窗口必须**第一个**创建。
-            // 主窗口的 WebView2 初始化是同步的，实测要 2 秒上下；先建主窗口的话，
-            // 这 2 秒里屏幕上是空的，动画等于白做。先把动画弹出来，主窗口在它背后慢慢初始化。
-            let splash_ok = match splash::create(&handle, &cache_dir) {
-                Ok(()) => {
-                    log::write("splash", "启动动画窗口已创建");
-                    true
-                }
-                Err(e) => {
-                    // 动画窗建不起来不该阻断启动 —— 下面直接把主窗口显示出来
-                    log::write("splash", format!("创建启动动画窗口失败：{e}，将直接显示主窗口"));
-                    false
-                }
-            };
-
-            // 主窗口先隐藏（tauri.conf.json 里 visible=false），
-            // 等启动动画跑完再放出来，避免动画期间后面闪出主界面。
+            // 主窗口先隐藏：等前端报告「第一帧已画好」再显示。
+            // 由 Rust 定时显示是不行的 —— 它无从知道 WebView 什么时候才真的画出了内容，
+            // 那样用户会看到一个还没画好的界面。
             let window_config = app
                 .config()
                 .app
@@ -171,17 +165,13 @@ pub fn run() {
                 .clone();
 
             WebviewWindowBuilder::from_config(&handle, &window_config)?
-                .data_directory(cache_dir.clone())
+                .data_directory(cache_dir)
                 .visible(false)
                 .build()?;
-            log::write("app", "主窗口已创建（隐藏）");
+            log::write("app", "主窗口已创建（隐藏），等待前端就绪");
             app.manage(state);
 
-            if splash_ok {
-                splash::spawn_fallback(handle.clone());
-            } else if let Some(m) = handle.get_webview_window(splash::MAIN_LABEL) {
-                let _ = m.show();
-            }
+            spawn_ready_watchdog(handle.clone());
 
             // 托盘与热键
             tray::setup(app)?;
@@ -220,4 +210,26 @@ pub fn run() {
             }
         }
     });
+}
+
+/// 兜底：前端万一始终没有报告就绪（脚本出错、资源没加载上……），
+/// 也必须把主窗口放出来，否则用户看到的是「启动动画播完后什么都没有」。
+fn spawn_ready_watchdog(app: tauri::AppHandle) {
+    std::thread::Builder::new()
+        .name("topmost-pin-ready-watchdog".to_string())
+        .spawn(move || {
+            std::thread::sleep(Duration::from_millis(splash::HOLD_MAX_MS + 800));
+            let inner = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(m) = inner.get_webview_window(splash::MAIN_LABEL) {
+                    if !m.is_visible().unwrap_or(false) {
+                        log::write("app", "前端始终未报告就绪，兜底放出主窗口");
+                        splash::destroy();
+                        let _ = m.show();
+                        let _ = m.set_focus();
+                    }
+                }
+            });
+        })
+        .ok();
 }

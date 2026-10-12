@@ -144,10 +144,19 @@ pub fn set_run_as_admin(
     }
 }
 
-/// 启动动画页跑完后调用：关掉动画窗、放出主窗口
+/// 前端画好第一帧后调用：收起启动动画、放出主窗口。
+///
+/// 由前端主动调用，而不是 Rust 定时显示 —— Rust 无从知道 WebView 什么时候
+/// 才真正画出了内容，定时显示会让用户看到一个还没画好的界面。
 #[tauri::command]
-pub fn finish_splash(app: AppHandle) {
-    crate::splash::finish(&app);
+pub fn main_ready(app: AppHandle) {
+    crate::splash::destroy();
+    if let Some(m) = app.get_webview_window("main") {
+        let _ = m.show();
+        let _ = m.unminimize();
+        let _ = m.set_focus();
+    }
+    crate::log::write("app", "前端已就绪，启动动画收尾、主窗口显示");
 }
 
 #[tauri::command]

@@ -38,8 +38,13 @@ export const setAutostart = (enabled: boolean) =>
 export const setRunAsAdmin = (enabled: boolean) =>
   invoke<boolean>("set_run_as_admin", { enabled });
 
-/** 启动动画播完后调用，关闭动画窗并放出主窗口 */
-export const finishSplash = () => invoke<void>("finish_splash");
+/**
+ * 前端画好第一帧后调用：收起启动动画、放出主窗口。
+ *
+ * 由前端主动报告，而不是后端定时显示 —— 后端无从知道 WebView 什么时候
+ * 才真正画出了内容。忘了调用也不会卡住：后端有兜底。
+ */
+export const mainReady = () => invoke<void>("main_ready");
 
 export const openDataDir = () => invoke<void>("open_data_dir");
 export const hideToTray = () => invoke<void>("hide_to_tray");
