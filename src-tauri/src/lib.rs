@@ -4,16 +4,18 @@
 //! 配置文件里主窗口 `create: false`，在这里手动创建，以便注入 WebView2 的
 //! 数据目录（便携版零残留）。
 
-mod autostart;
-mod commands;
-mod error;
-mod events;
-mod hotkey;
-mod pin;
-mod portable;
-mod state;
-mod tray;
-mod winapi;
+// 模块对 crate 外可见，是为了让 tests/ 下的集成测试能直接对真实窗口
+// 验证 Win32 层（见 tests/win32_e2e.rs）。
+pub mod autostart;
+pub mod commands;
+pub mod error;
+pub mod events;
+pub mod hotkey;
+pub mod pin;
+pub mod portable;
+pub mod state;
+pub mod tray;
+pub mod winapi;
 
 use tauri::{Manager, WebviewWindowBuilder};
 

@@ -37,6 +37,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Threading",
     "Win32_System_ProcessStatus",
+    "Win32_System_LibraryLoader",
 ] }
 
 serde = { version = "1", features = ["derive"] }
