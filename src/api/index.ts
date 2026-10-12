@@ -50,6 +50,14 @@ export const openDataDir = () => invoke<void>("open_data_dir");
 export const hideToTray = () => invoke<void>("hide_to_tray");
 export const quitApp = () => invoke<void>("quit_app");
 
+/**
+ * 以管理员身份重启自己（用户在权限条上主动点击）。
+ *
+ * 返回 Ok 只代表「提权已经发起、本进程马上退出」—— 新实例是另一个进程，
+ * 前端这一侧不会再有后续。失败（多为用户取消 UAC）时抛错，错误信息可直接展示。
+ */
+export const relaunchAsAdmin = () => invoke<void>("relaunch_as_admin");
+
 /* ── 事件 ─────────────────────────────────────────────── */
 
 export const onPinChanged = (fn: (p: PinChangedPayload) => void) =>

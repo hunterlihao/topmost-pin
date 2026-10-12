@@ -185,6 +185,7 @@ pub fn run() {
             commands::get_snapshot,
             commands::set_autostart,
             commands::set_hotkey,
+            commands::relaunch_as_admin,
             commands::main_ready,
             commands::open_data_dir,
             commands::hide_to_tray,

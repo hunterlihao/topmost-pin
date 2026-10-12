@@ -2,8 +2,10 @@
 import { onMounted, onUnmounted } from "vue";
 
 import * as api from "./api";
+import ElevationBand from "./components/ElevationBand.vue";
 import ErrorStrip from "./components/ErrorStrip.vue";
 import KeyCap from "./components/KeyCap.vue";
+import PinGlyph from "./components/PinGlyph.vue";
 import SettingsView from "./views/SettingsView.vue";
 import WindowListView from "./views/WindowListView.vue";
 import { useAppStore } from "./stores/app";
@@ -69,6 +71,9 @@ onUnmounted(() => {
   <div class="app">
     <header class="masthead">
       <div class="masthead__id">
+        <!-- 应用标记：和任务栏图标同一个记号 —— 墨色方块 + 抬起的图钉。
+             它不装饰，它就是这套设计的主张本身。 -->
+        <span class="mark" aria-hidden="true"><PinGlyph filled /></span>
         <h1 class="masthead__title">窗口置顶助手</h1>
         <nav class="seg" aria-label="视图">
           <button
@@ -89,18 +94,31 @@ onUnmounted(() => {
       </div>
 
       <div class="masthead__meta">
-        <KeyCap :keys="hotkeyKeys" :off="!s.snapshot?.hotkeyActive" />
-        <span class="masthead__divider" aria-hidden="true"></span>
-        <span class="label">已置顶</span>
+        <KeyCap v-if="s.snapshot?.hotkeyActive" :keys="hotkeyKeys" />
+        <!-- 热键没注册上时键帽会渲染成空 —— 那不是「安静」，那是把
+            最重要的一条异常状态显示成了什么都没有。改用明确的标记。 -->
+        <span v-else-if="s.snapshot" class="tag tag--alert">热键不可用</span>
         <span
-          class="count mono"
+          v-if="s.snapshot"
+          class="masthead__divider"
+          aria-hidden="true"
+        ></span>
+        <span
+          class="masthead__count"
           :title="`已置顶 ${pinnedCount}，可见窗口 ${visibleCount}`"
         >
-          <strong class="count__now">{{ pinnedCount }}</strong>
-          <span class="count__of">/ {{ visibleCount }}</span>
+          <span class="eyebrow">已置顶</span>
+          <span class="count mono">
+            <strong class="count__now">{{ pinnedCount }}</strong>
+            <span class="count__of">/ {{ visibleCount }}</span>
+          </span>
         </span>
       </div>
     </header>
+
+    <!-- 权限失败是「为什么点了没反应」的唯一解释，而且它在两个视图里都成立
+         （置顶失败与当前在哪一页无关），所以放在报头正下方，不归某一页管。 -->
+    <ElevationBand v-if="s.snapshot && !s.snapshot.isAdmin" />
 
     <ErrorStrip
       v-if="s.error"
@@ -144,15 +162,28 @@ onUnmounted(() => {
 .masthead__id {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   min-width: 0;
+}
+
+/* 22px 墨块 + 纸白图钉 = 任务栏图标的缩小版，也是「反相即抬升」的图例 */
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-object);
+  background: var(--ink);
+  color: var(--on-ink);
 }
 
 .masthead__title {
   font-family: var(--font-display);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
@@ -166,6 +197,12 @@ onUnmounted(() => {
   width: 1px;
   height: 20px;
   background: var(--rule);
+}
+
+.masthead__count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
 }
 
 .count {

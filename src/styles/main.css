@@ -188,6 +188,19 @@ button {
   padding: 0 1px;
 }
 
+/* 大号键帽：只用在空台面上 —— 那一屏里热键是唯一要做的事，
+   把「该按什么」画成真实尺寸，比写一行说明有效得多。 */
+.kbd--lg {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+.kbd-plus--lg {
+  font-size: 12px;
+  padding: 0 3px;
+}
+
 /* ── 分段控件：选中态同样走反相 ───────────────────── */
 
 .seg {

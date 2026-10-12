@@ -112,6 +112,52 @@ pub fn set_hotkey(state: State<'_, AppState>, combo: String) -> AppResult<String
     state.rebind_hotkey(&combo)
 }
 
+/// 用户主动点「以管理员身份重启」。
+///
+/// 为什么值得单独开一条命令，而不是只让用户自己去重开程序：
+/// 启动时的提权有 60 秒冷却（见 lib.rs 的 SWITCH_COOLDOWN_MS），
+/// 所以「重新启动程序，并在 UAC 提示中选『是』」这条建议在**最快**的情况下
+/// 恰好是错的 —— 用户在 1 分钟内重开，程序根本不会重试提权，什么都不会发生。
+/// 用户明确点了按钮，就明确越过冷却。
+#[tauri::command]
+pub fn relaunch_as_admin(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    if state.is_admin {
+        return Err(AppError::msg("当前已经是管理员权限，不需要重启。"));
+    }
+
+    let marker = crate::elevation::marker_path(&state.paths.data_dir);
+    // 标记必须先落盘再启动新实例：新实例靠它判断「我是一次提权重启」，
+    // 从而愿意等旧实例释放单实例互斥体（见 lib.rs 与 single_instance.rs）。
+    std::fs::write(&marker, "admin")?;
+
+    match crate::elevation::relaunch_elevated() {
+        Ok(()) => {
+            crate::log::write("cmd", "用户主动要求提权重启，本进程稍后退出");
+            // ★ 两个不能省的细节：
+            //
+            // 1) 不立刻退出。这条 IPC 的回执还没送到前端，进程就没了的话，
+            //    前端会把一次成功显示成一个错误。留 600ms 让回执送达。
+            // 2) 走 app.exit(0) 这条**正常退出**路径，而不是 std::process::exit。
+            //    前者会触发 RunEvent::Exit，那里先停热键线程、再取消全部置顶；
+            //    后者会跳过取消置顶，把窗口永久留在最上层而下次启动的集合里没有它
+            //    —— 正是 lib.rs 里那段顺序注释在防的事故。
+            let handle = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                handle.exit(0);
+            });
+            Ok(())
+        }
+        Err(e) => {
+            // 提权没成功（多半是用户取消了 UAC），标记必须撤掉 ——
+            // 留着它会让下一次启动误判「我是一次重启的结果」而跳过提权。
+            let _ = std::fs::remove_file(&marker);
+            crate::log::write("cmd", format!("提权重启失败：{e}"));
+            Err(e)
+        }
+    }
+}
+
 /// 前端画好第一帧后调用：收起启动动画、放出主窗口。
 ///
 /// 由前端主动调用，而不是 Rust 定时显示 —— Rust 无从知道 WebView 什么时候

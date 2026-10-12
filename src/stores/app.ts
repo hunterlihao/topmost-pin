@@ -5,7 +5,6 @@ import { computed, reactive, readonly } from "vue";
 import * as api from "../api";
 import type { Snapshot, WindowInfo } from "../types";
 
-export type FilterMode = "all" | "pinned";
 export type ViewName = "windows" | "settings";
 
 const state = reactive({
@@ -16,7 +15,6 @@ const state = reactive({
   busy: new Set<number>(),
   unpinning: false,
   query: "",
-  filter: "all" as FilterMode,
   view: "windows" as ViewName,
   error: "" as string,
   toast: "" as string,
@@ -29,10 +27,22 @@ function normalize(s: string) {
   return s.trim().replace(/\s+/g, " ");
 }
 
-const filtered = computed(() => {
+/**
+ * 台面（已置顶）上的行。
+ *
+ * ★ 刻意**不**受搜索影响 —— 这是这一版改版的一个决定。
+ *   搜索解决的是「在一堆窗口里找到想抬起来的那一个」，而台面是**状态读数**：
+ *   已经被抬起来的东西，不该因为你在下面找别的东西就从屏幕上消失。
+ *   顺带也让台面标题上的计数永远等于它下面显示的行数，不会出现
+ *   「写着 3 行、只显示 1 行」这种看起来像 bug 的状态。
+ */
+const pinnedWindows = computed(() => state.windows.filter((w) => w.pinned));
+
+/** 下层候选区 = 未置顶的窗口，受搜索影响 */
+const looseWindows = computed(() => {
   const q = normalize(state.query).toLowerCase();
   return state.windows.filter((w) => {
-    if (state.filter === "pinned" && !w.pinned) return false;
+    if (w.pinned) return false;
     if (!q) return true;
     return (
       w.title.toLowerCase().includes(q) ||
@@ -42,11 +52,10 @@ const filtered = computed(() => {
   });
 });
 
-/** 置顶的排在上面 —— 这正是「水面线之上」 */
-const pinnedWindows = computed(() => filtered.value.filter((w) => w.pinned));
-const looseWindows = computed(() => filtered.value.filter((w) => !w.pinned));
+/** 搜索框里是否有有效关键词（决定「没有匹配」怎么显示） */
+const searchActive = computed(() => normalize(state.query).length > 0);
 
-const pinnedCount = computed(() => state.windows.filter((w) => w.pinned).length);
+const pinnedCount = computed(() => pinnedWindows.value.length);
 const visibleCount = computed(() => state.windows.length);
 
 const hotkeyKeys = computed(() => {
@@ -218,9 +227,9 @@ function dispose() {
 export function useAppStore() {
   return {
     state: readonly(state),
-    filtered,
     pinnedWindows,
     looseWindows,
+    searchActive,
     pinnedCount,
     visibleCount,
     hotkeyKeys,
@@ -236,9 +245,6 @@ export function useAppStore() {
     dispose,
     setQuery: (q: string) => {
       state.query = q;
-    },
-    setFilter: (f: FilterMode) => {
-      state.filter = f;
     },
     setView: (v: ViewName) => {
       state.view = v;

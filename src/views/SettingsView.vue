@@ -155,65 +155,63 @@ async function onCopy(text: string, what: string) {
 
 <template>
   <section class="view">
-    <!-- ── 运行权限（只读：程序固定以管理员运行，没有开关）───── -->
-    <div class="group">
-      <h2 class="label group__title">运行权限</h2>
-      <div class="group__col">
-        <div class="group__row">
-          <span class="tag mono" :class="{ 'tag--warn': !isAdmin }">
+    <div class="rows">
+      <!-- ── 运行权限（只读：程序固定以管理员运行，没有开关）───────── -->
+      <div class="row">
+        <div class="row__main">
+          <h2 class="row__title">运行权限</h2>
+          <p class="row__desc">
+            本程序固定以管理员身份运行，不做成可关闭的开关。置顶受 Windows 完整性级别限制（UIPI）：普通权限进程无法操作「以管理员身份运行」的窗口，而浏览器、IDE、资源管理器往往正是这一类 —— 做成选项的话，默认那一侧在最需要它的场景下恰好用不了。
+          </p>
+        </div>
+        <div class="row__control">
+          <span class="tag" :class="{ 'tag--alert': !isAdmin }">
             {{ isAdmin ? "已以管理员身份运行" : "当前以普通权限运行" }}
           </span>
         </div>
-
-        <p class="group__note">
-          本程序固定以管理员身份运行。置顶受 Windows 完整性级别限制（UIPI）：普通权限进程无法操作「以管理员身份运行」的窗口 —— 而浏览器、IDE、资源管理器往往正是这一类，所以这一项不做成可关闭的开关。
-        </p>
-
-        <!-- 中文换行会被渲染成一个空格，所以整句写在一行里，不要中途断行 -->
-        <p v-if="!isAdmin" class="notice">
-          本次提权未成功（UAC 被拒绝，或当前账户没有管理员权限），因此无法置顶提权的窗口。重新启动程序，并在 UAC 提示中选「是」即可。
-        </p>
       </div>
-    </div>
 
-    <!-- ── 热键 ─────────────────────────────────────────── -->
-    <div class="group">
-      <h2 class="label group__title">热键</h2>
-      <div class="group__col">
-        <!-- 录制中：接管键盘，按下组合键即生效 -->
-        <div v-if="recording" class="group__row">
-          <span class="recorder mono">请按下新的组合键…</span>
-          <button class="btn btn-sm" type="button" @click="stopRecording">
-            取消
-          </button>
-        </div>
-
-        <div v-else class="group__row">
-          <KeyCap :keys="hotkeyKeys" :off="!s.snapshot?.hotkeyActive" />
-          <button class="btn btn-sm" type="button" @click="startRecording">
-            修改
-          </button>
-          <span class="group__note">
+      <!-- ── 全局热键 ─────────────────────────────────────────────── -->
+      <div class="row">
+        <div class="row__main">
+          <h2 class="row__title">全局热键</h2>
+          <p class="row__desc">
             {{
               s.snapshot?.hotkeyActive
-                ? "指向任意窗口按下即可置顶，再按一次取消。"
-                : "当前没有可用的热键，界面仍可正常置顶。"
+                ? "指向任意窗口按下即可置顶，再按一次取消。在任何程序里都有效。"
+                : "当前没有可用的热键 —— 多半是被别的程序占用了。界面仍可正常置顶。"
             }}
-          </span>
+          </p>
         </div>
-
-        <p v-if="hotkeyError" class="notice">{{ hotkeyError }}</p>
-        <p v-else-if="recording" class="group__note">
+        <div class="row__control">
+          <!-- 录制中：接管键盘，按下组合键即生效 -->
+          <template v-if="recording">
+            <span class="recorder mono">请按下新的组合键…</span>
+            <button class="btn btn-sm" type="button" @click="stopRecording">
+              取消
+            </button>
+          </template>
+          <template v-else>
+            <KeyCap :keys="hotkeyKeys" :off="!s.snapshot?.hotkeyActive" />
+            <button class="btn btn-sm" type="button" @click="startRecording">
+              修改
+            </button>
+          </template>
+        </div>
+        <!-- 录制提示与失败原因横跨整行：它们是要读的句子，挤在按钮旁边读不完 -->
+        <p v-if="hotkeyError" class="row__notice">{{ hotkeyError }}</p>
+        <p v-else-if="recording" class="row__notice row__notice--quiet">
           必须带至少一个修饰键（Ctrl / Alt / Shift），主键支持字母、数字与 F1–F24；按 Esc 取消。
         </p>
       </div>
-    </div>
 
-    <!-- ── 开机自启 ─────────────────────────────────────── -->
-    <div class="group">
-      <h2 class="label group__title">开机自启</h2>
-      <div class="group__col">
-        <div class="group__row">
+      <!-- ── 开机自启 ─────────────────────────────────────────────── -->
+      <div class="row">
+        <div class="row__main">
+          <h2 class="row__title">开机自启</h2>
+          <p class="row__desc">登录后自动在后台运行，不弹出窗口。</p>
+        </div>
+        <div class="row__control">
           <button
             class="switch"
             type="button"
@@ -229,32 +227,32 @@ async function onCopy(text: string, what: string) {
             </span>
             <span class="switch__text">{{ autostart ? "已开启" : "已关闭" }}</span>
           </button>
-          <span class="group__note">登录后自动在后台运行。</span>
         </div>
-
-        <!-- 自启与提权是个真实的坑：注册表启动项无法自动提权 -->
-        <p v-if="autostart" class="notice notice--quiet">
+        <!-- 自启与提权是个真实的坑：注册表启动项无法自动提权。
+             和上面的录制提示一样横跨整行，绝不塞进说明列里。 -->
+        <p v-if="autostart" class="row__notice row__notice--quiet">
           注册表启动项无法自动提权，所以每次登录都会弹一次 UAC；选择「是」之后程序才以管理员身份重新启动。
         </p>
       </div>
-    </div>
 
-    <!-- ── 数据 ─────────────────────────────────────────── -->
-    <div class="group">
-      <h2 class="label group__title">数据</h2>
-      <div class="group__col">
-        <p class="path mono selectable">{{ s.snapshot?.dbPath ?? "—" }}</p>
-        <p class="group__note">
-          SQLite 单文件，存设置项与置顶事件历史（已记录
-          <strong class="mono">{{ s.snapshot?.pinEventCount ?? 0 }}</strong>
-          条）。
-          {{
-            s.snapshot?.portable
-              ? "位于程序同目录，整个文件夹拷走即可，系统里不留痕迹。"
-              : "程序目录不可写，已回退到系统目录。把程序放到可写目录即可恢复便携。"
-          }}
-        </p>
-        <div class="actions">
+      <!-- ── 数据与状态 ───────────────────────────────────────────── -->
+      <div class="row">
+        <div class="row__main">
+          <h2 class="row__title">数据与状态</h2>
+          <p class="row__desc">
+            设置项与置顶事件历史存在一个 SQLite 单文件里。置顶状态本身不写入磁盘 —— 它绑定的是窗口句柄，重启后即失效；正常退出会自动取消全部置顶，异常退出若留下残留，重新运行后点一次「全部取消」即可清除。
+          </p>
+          <p class="row__meta mono">
+            已记录 {{ s.snapshot?.pinEventCount ?? 0 }} 条置顶事件 ·
+            {{
+              s.snapshot?.portable
+                ? "便携模式，数据在程序目录"
+                : "程序目录不可写，数据已回退到系统目录"
+            }}
+          </p>
+          <p class="path mono selectable">{{ s.snapshot?.dbPath ?? "—" }}</p>
+        </div>
+        <div class="row__control">
           <button class="btn btn-sm" type="button" @click="onOpenDir">
             打开数据目录
           </button>
@@ -269,104 +267,137 @@ async function onCopy(text: string, what: string) {
       </div>
     </div>
 
-    <!-- ── 操作 ─────────────────────────────────────────── -->
-    <div class="group">
-      <h2 class="label group__title">操作</h2>
-      <div class="group__row">
-        <button class="btn btn-sm" type="button" @click="api.hideToTray()">
-          隐藏到托盘
-        </button>
-        <button class="btn btn-sm" type="button" @click="api.quitApp()">
-          退出
-        </button>
-        <span class="group__note"
-          >关掉窗口只是收进托盘，程序仍会保持已置顶的窗口在上层。</span
-        >
-      </div>
-    </div>
-
-    <!-- ── 关于 ─────────────────────────────────────────── -->
-    <div class="group">
-      <h2 class="label group__title">关于</h2>
-      <div class="group__row">
-        <span class="mono about__ver">v{{ version }}</span>
-        <span class="group__note">
-          置顶状态不写入磁盘 —— 窗口句柄重启后即失效。正常退出时程序会自动取消全部置顶；若程序异常结束留下了残留，重新运行后点一次「全部取消」即可清除。
-        </span>
-      </div>
-    </div>
+    <!-- ── 页脚：应用级动作，不是设置项 ───────────────────────────── -->
+    <footer class="foot">
+      <button class="btn btn-sm" type="button" @click="api.hideToTray()">
+        隐藏到托盘
+      </button>
+      <button class="btn btn-sm" type="button" @click="api.quitApp()">
+        退出
+      </button>
+      <span class="foot__note">
+        关掉窗口只是收进托盘，程序仍会保持已置顶的窗口在上层。
+      </span>
+      <span class="foot__ver mono">v{{ version }}</span>
+    </footer>
   </section>
 </template>
 
 <style scoped>
 .view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.rows {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 
-.group {
+/* 设置行：左边是「这是什么 + 为什么」，右边是「怎么改」。
+   标签列 + 内容列的旧布局在 940px 宽度下给说明文字留了一大块右半空白，
+   而行是横向的 —— 说明读起来要跨过整行，控件却在下一行。 */
+.row {
   display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
-  gap: 16px;
-  padding: 18px 20px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 24px;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--rule);
 }
-.group__title {
-  padding-top: 3px;
-}
-.group__row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-}
-.group__col {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+
+.row__main {
   min-width: 0;
 }
-.group__note {
+
+.row__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.row__desc {
+  margin: 3px 0 0;
+  max-width: 66ch;
   color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.row__control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 横跨整行的提示（录制中的说明、失败原因、自启的 UAC 提醒） */
+.row__notice {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border: 2px solid var(--ink);
   font-size: 12.5px;
   line-height: 1.6;
 }
+.row__notice--quiet {
+  border-width: 1px;
+  border-color: var(--rule-strong);
+  color: var(--ink-3);
+}
+
+.row__meta {
+  margin: 7px 0 0;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
 
 .path {
-  margin: 0;
-  padding: 8px 10px;
+  margin: 6px 0 0;
+  padding: 7px 10px;
   border: 1px solid var(--rule);
   border-radius: var(--radius-object);
   background: var(--well);
+  color: var(--ink-2);
   font-size: 12px;
   word-break: break-all;
 }
 
-.actions {
+/* ── 页脚 ─────────────────────────────────────────
+   「隐藏到托盘 / 退出 / 版本号」不是设置项，放在最后一块分组里会让它和
+   真正要改的东西混在一起。收进页脚，并且在滚动区之外。 */
+.foot {
   display: flex;
+  align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex: none;
+  padding: 12px 20px;
+  border-top: 1px solid var(--rule);
+  background: var(--well);
 }
-
-/* 当前权限的只读标签 */
-.tag {
-  padding: 2px 8px;
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-object);
-  font-size: 11px;
-  color: var(--ink-2);
+.foot__note {
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.tag--warn {
-  border-color: var(--ink);
-  background: var(--ink);
-  color: var(--on-ink);
+.foot__ver {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: 12px;
 }
 
 /* 录制态：反白块，明确「现在键盘归我」。
    轻微闪烁是给「正在等你按键」的状态感，不是装饰。 */
 .recorder {
-  padding: 3px 10px;
+  padding: 4px 10px;
   border: 1px solid var(--ink);
   border-radius: var(--radius-object);
   background: var(--ink);
@@ -383,28 +414,6 @@ async function onCopy(text: string, what: string) {
   .recorder {
     animation: none;
   }
-}
-
-/* 设置已保存但需重启时的提示条 */
-.notice {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0;
-  padding: 8px 10px;
-  border: 2px solid var(--ink);
-  font-size: 12.5px;
-}
-/* 只是一条提醒、不需要动作时，退成细边框，避免和上面那条抢注意力 */
-.notice--quiet {
-  border-width: 1px;
-  border-color: var(--rule-strong);
-  color: var(--ink-3);
-}
-
-.about__ver {
-  font-size: 13px;
-  font-weight: 600;
 }
 
 /* ── 开关：方形滑块，与全局「对象 2px 圆角」一致，不做胶囊 ── */
@@ -450,10 +459,22 @@ async function onCopy(text: string, what: string) {
   color: var(--ink-2);
 }
 
+/* 窄窗：控件折到说明下面，右对齐改成左对齐，避免又窄又靠右的怪布局 */
 @media (max-width: 720px) {
-  .group {
+  .row {
     grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
+  }
+  .row__control {
+    justify-content: flex-start;
+    margin-top: 4px;
+  }
+  .foot {
+    flex-wrap: wrap;
+  }
+  .foot__note {
+    flex-basis: 100%;
+    margin-left: 0;
+    white-space: normal;
   }
 }
 </style>

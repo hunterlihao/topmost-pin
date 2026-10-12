@@ -1,21 +1,19 @@
 <script setup lang="ts">
+import EmptyDeck from "../components/EmptyDeck.vue";
 import WindowRow from "../components/WindowRow.vue";
-import KeyCap from "../components/KeyCap.vue";
 import { useAppStore } from "../stores/app";
 
 const {
   state: s,
-  filtered,
   pinnedWindows,
   looseWindows,
-  pinnedCount,
+  searchActive,
   visibleCount,
   hotkeyKeys,
   refresh,
   toggle,
   unpinAll,
   setQuery,
-  setFilter,
 } = useAppStore();
 
 function onSearch(e: Event) {
@@ -25,96 +23,96 @@ function onSearch(e: Event) {
 
 <template>
   <section class="view">
-    <!-- 工具条：安静，只做分区与发丝线 -->
-    <div class="toolbar">
-      <input
-        class="input toolbar__search"
-        type="search"
-        :value="s.query"
-        placeholder="搜索窗口标题或进程名"
-        aria-label="搜索窗口"
-        @input="onSearch"
-      />
-      <div class="seg" role="group" aria-label="筛选">
+    <!-- ── 台面：已置顶 ────────────────────────────────────────────────
+         一块有边界的墨，独立滚动。这层「边界」是有意义的：z 序里被抬起来的
+         东西不构成一个列表，它们构成**一个平面** —— 而且不会因为你翻找
+         下面的窗口而移动。所以台面自己滚，下层候选区自己滚。 -->
+    <div v-if="pinnedWindows.length > 0" class="deck">
+      <div class="deck__head">
+        <span class="deck__title">
+          已置顶 <span class="deck__count mono">{{ pinnedWindows.length }}</span>
+        </span>
         <button
+          class="btn btn-sm deck__clear"
           type="button"
-          :aria-pressed="s.filter === 'all'"
-          @click="setFilter('all')"
+          :disabled="s.unpinning"
+          @click="unpinAll()"
         >
-          全部
-        </button>
-        <button
-          type="button"
-          :aria-pressed="s.filter === 'pinned'"
-          @click="setFilter('pinned')"
-        >
-          已置顶
+          全部取消
         </button>
       </div>
-      <!-- 用户主动点刷新 = 明确表示要看最新状态，这时才清错误条 -->
-      <button class="btn btn-sm" type="button" @click="refresh({ clearError: true })">
-        刷新
-      </button>
-      <button
-        class="btn btn-sm"
-        type="button"
-        :disabled="s.unpinning || pinnedCount === 0"
-        @click="unpinAll()"
-      >
-        全部取消
-      </button>
+
+      <ul class="deck__rows">
+        <WindowRow
+          v-for="w in pinnedWindows"
+          :key="w.hwnd"
+          :item="w"
+          :busy="s.busy.has(w.hwnd)"
+          variant="deck"
+          @toggle="toggle"
+        />
+      </ul>
     </div>
 
-    <!-- 一个窗口都没置顶时，把热键摆在这里 —— 它是最该被学会的那件事。
-         热键没注册上时改说清楚，不能提示一个按了没反应的键。 -->
-    <p v-if="pinnedCount === 0 && !s.loading" class="hint">
-      <template v-if="s.snapshot?.hotkeyActive">
-        <!-- 逗号必须紧贴 KeyCap：中文换行在渲染时会变成一个空格，
-             写成两行就会显示成「… [P] ，或点…」 -->
-        还没有置顶窗口 —— 指向任意窗口按 <KeyCap :keys="hotkeyKeys" />，或点下方窗口行左侧的图钉。
-      </template>
-      <template v-else>
-        还没有置顶窗口。热键被其它程序占用了，点下方窗口行左侧的图钉即可置顶
-        —— 也可以在「设置」里看当前状态。
-      </template>
-    </p>
+    <!-- 空台面：界面 99% 时间停在这一屏，所以它自己得是被设计过的 -->
+    <EmptyDeck
+      v-else-if="!s.loading"
+      :keys="hotkeyKeys"
+      :hotkey-active="!!s.snapshot?.hotkeyActive"
+    />
 
-    <p v-if="s.loading" class="empty">正在读取窗口…</p>
+    <!-- ── 下层：候选窗口 ──────────────────────────────────────────── -->
+    <div class="surface">
+      <div class="toolbar">
+        <input
+          class="input toolbar__search"
+          type="search"
+          :value="s.query"
+          placeholder="搜索窗口标题、进程名或类名"
+          aria-label="搜索窗口"
+          @input="onSearch"
+        />
+        <!-- 用户主动点刷新 = 明确表示要看最新状态，这时才清错误条 -->
+        <button
+          class="btn btn-sm toolbar__refresh"
+          type="button"
+          @click="refresh({ clearError: true })"
+        >
+          刷新
+        </button>
+      </div>
 
-    <p v-else-if="visibleCount === 0" class="empty">
-      没有找到可见窗口。<br />
-      <span class="empty__sub">窗口可能都被最小化了。</span>
-    </p>
+      <p v-if="s.loading" class="empty">正在读取窗口…</p>
 
-    <p v-else-if="filtered.length === 0" class="empty">
-      没有匹配的窗口。<br />
-      <span class="empty__sub">换个关键词，或切回「全部」。</span>
-    </p>
+      <p v-else-if="visibleCount === 0" class="empty">
+        没有找到可见窗口。<br />
+        <span class="empty__sub">窗口可能都被最小化了。</span>
+      </p>
 
-    <ul v-else class="list">
-      <WindowRow
-        v-for="w in pinnedWindows"
-        :key="w.hwnd"
-        :item="w"
-        :busy="s.busy.has(w.hwnd)"
-        @toggle="toggle"
-      />
+      <p v-else-if="looseWindows.length === 0" class="empty">
+        <template v-if="searchActive">
+          没有匹配的窗口。<br />
+          <span class="empty__sub">换个关键词试试。</span>
+        </template>
+        <template v-else>
+          所有可见窗口都已经置顶了。<br />
+          <span class="empty__sub"
+            >在台面上点图钉可以取消，或按热键切换。</span
+          >
+        </template>
+      </p>
 
-      <!-- 水面线：2px 粗墨线，之上是被抬起的窗口 -->
-      <li
-        v-if="pinnedWindows.length > 0 && looseWindows.length > 0"
-        class="waterline"
-        aria-hidden="true"
-      ></li>
-
-      <WindowRow
-        v-for="w in looseWindows"
-        :key="w.hwnd"
-        :item="w"
-        :busy="s.busy.has(w.hwnd)"
-        @toggle="toggle"
-      />
-    </ul>
+      <ul v-else class="list">
+        <WindowRow
+          v-for="w in looseWindows"
+          :key="w.hwnd"
+          :item="w"
+          :busy="s.busy.has(w.hwnd)"
+          variant="surface"
+          @toggle="toggle"
+        />
+      </ul>
+    </div>
   </section>
 </template>
 
@@ -126,31 +124,111 @@ function onSearch(e: Event) {
   height: 100%;
 }
 
+/* ── 台面 ─────────────────────────────────────────── */
+
+.deck {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  /* 有界：台面最多占列表区的 46%，再多就在自己的区域里滚。
+     不给上限的话，置顶 20 个窗口会把下面的候选区挤到看不见。 */
+  max-height: 46%;
+  background: var(--ink);
+  color: var(--on-ink);
+  /* 2px 的岸线：抬起来的那一层到纸面之间的硬边。
+     整个平面都是墨，所以这条线读起来是墨块的加厚下沿，而不是一条分隔线。 */
+  border-bottom: 2px solid var(--ink);
+}
+
+.deck__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  height: 30px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--deck-line);
+}
+
+.deck__title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--on-ink-2);
+}
+.deck__count {
+  color: var(--on-ink);
+  font-size: 12px;
+}
+
+/* 反相上下文里的小按钮：不能沿用纸面上的 .btn（白底黑字会很扎眼） */
+.deck__clear {
+  height: 22px;
+  padding: 0 8px;
+  border-color: rgba(255, 255, 255, 0.32);
+  background: transparent;
+  color: var(--on-ink);
+  font-size: 11.5px;
+}
+.deck__clear:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+.deck__clear:disabled {
+  color: var(--on-ink-3);
+  border-color: var(--deck-line);
+}
+
+.deck__rows {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+/* 墨面上的滚动条要反相，否则深灰滑道压在黑底上看不见 */
+.deck__rows::-webkit-scrollbar-thumb {
+  background: #4a4a4a;
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+.deck__rows::-webkit-scrollbar-thumb:hover {
+  background: #6a6a6a;
+  background-clip: content-box;
+}
+
+/* ── 下层候选区 ───────────────────────────────────── */
+
+.surface {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  display: flex;
   align-items: center;
   gap: 8px;
+  flex: none;
   padding: 10px 16px;
   border-bottom: 1px solid var(--rule);
 }
-
-.hint {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--rule);
-  background: var(--well);
-  color: var(--ink-2);
-  font-size: 12.5px;
+.toolbar__search {
+  flex: 1;
+  min-width: 0;
+}
+.toolbar__refresh {
+  flex: none;
 }
 
 .empty {
   margin: 0;
-  padding: 56px 16px;
+  padding: 48px 16px;
   text-align: center;
   color: var(--ink-2);
   font-size: 13.5px;
@@ -170,16 +248,9 @@ function onSearch(e: Event) {
   list-style: none;
 }
 
-/* 水面线：2px 纯墨，把「抬起的」与「沉底的」分开 */
-.waterline {
-  height: 2px;
-  background: var(--ink);
-}
-
 @media (max-width: 720px) {
-  .toolbar {
-    grid-template-columns: minmax(0, 1fr) auto;
-    row-gap: 8px;
+  .deck__head {
+    padding: 0 12px;
   }
 }
 </style>
