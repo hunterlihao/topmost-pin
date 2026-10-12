@@ -101,7 +101,7 @@ const html = (state) => {
     dataDir: "D:\\tools\\窗口置顶助手\\data",
     dbPath: "D:\\tools\\窗口置顶助手\\data\\data.db",
     pinEventCount: 128,
-    version: "1.0.0",
+    version: "1.1.0",
   };
 
   return `<!doctype html>

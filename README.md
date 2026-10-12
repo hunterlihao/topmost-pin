@@ -14,7 +14,10 @@
 ## 下载
 
 **[最新版本](https://github.com/hunterlihao/topmost-pin/releases/latest)** ——
-`topmost-pin-v1.0.0-portable-win-x64.zip`，解压后双击 `窗口置顶助手.exe`。
+发布页上的便携包（`topmost-pin-v<版本>-portable-win-x64.zip`），解压后双击 `窗口置顶助手.exe`。
+
+> 文件名里的版本号写死在 README 里的话，每次发版这句话就过期一次 —— 而它恰好位于
+> 全仓库最显眼的位置。所以这里只写模式，具体文件名以发布页为准。
 
 > **exe 没有代码签名**，首次运行会被 Windows SmartScreen 拦一下：
 > 点「更多信息」→「仍要运行」即可。不放心可以先核对 Release 页上公布的 SHA256，
