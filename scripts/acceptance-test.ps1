@@ -152,47 +152,6 @@ public class Acc {
         return IntPtr.Zero;
     }
 
-    public static bool CenterHitsSelf(IntPtr h) {
-        RECT r; GetWindowRect(h, out r);
-        POINT p; p.X = (r.Left + r.Right) / 2; p.Y = (r.Top + r.Bottom) / 2;
-        IntPtr w = WindowFromPoint(p);
-        if (w == IntPtr.Zero) return false;
-        IntPtr root = GetAncestor(w, GA_ROOT);
-        return (root == IntPtr.Zero ? w : root) == h;
-    }
-
-    /// 把窗口提到**非置顶层级**的最前面。
-    ///
-    /// HWND_TOP(0) 而不是 HWND_TOPMOST(-1)：只改 z 序，不碰 WS_EX_TOPMOST，
-    /// 因此「初始未置顶」这条断言依然成立。
-    /// 实测用户桌面被最大化的浏览器铺满，目标窗口完全不可见，不抬起来就没法测。
-    public static void Raise(IntPtr h) {
-        const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
-        SetWindowPos(h, IntPtr.Zero, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    }
-
-    /// 控制实验：由**本脚本自己**对目标窗口做一次置顶/还原。
-    ///
-    /// 用来区分两种失败：
-    ///   · 脚本自己也失败 -> 是当前自动化环境不允许跨进程操作窗口（沙箱限制），
-    ///                       与产品无关，应当跳过而不是判失败；
-    ///   · 脚本成功、应用失败 -> 才是真正的产品缺陷。
-    /// 没有这个对照，「置顶失败」这个结论就无法归因。
-    public static string ControlPin(IntPtr h) {
-        const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010, SWP_NOOWNERZORDER = 0x0200;
-        uint flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
-        SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, flags);   // HWND_TOPMOST
-        int err = Marshal.GetLastWin32Error();
-        bool on = IsTopMost(h);
-        if (on) { SetWindowPos(h, new IntPtr(-2), 0, 0, 0, 0, flags); }  // 还原
-        return string.Format("置顶生效={0} err={1}", on, err);
-    }
-
-    public static void CenterOf(IntPtr h, out int x, out int y) {
-        RECT r; GetWindowRect(h, out r);
-        x = (r.Left + r.Right) / 2; y = (r.Top + r.Bottom) / 2;
-    }
-
     /// 在窗口矩形内找一个**确实露出来**的点（没有被别的窗口盖住）。
     ///
     /// 不能直接用矩形中心：实测资源管理器窗口的中心正好被浏览器盖住，
