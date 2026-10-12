@@ -21,7 +21,7 @@
         "minHeight": 520,
         "center": true,
         "resizable": true,
-        "visible": true
+        "visible": false
       }
     ],
     "security": {

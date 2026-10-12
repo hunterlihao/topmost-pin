@@ -22,12 +22,20 @@ export interface Snapshot {
   hotkey: string;
   /** 热键是否注册成功。false = 被其他程序占用，界面需提示 */
   hotkeyActive: boolean;
-  /** 是否已设置开机自启 */
+  /** 是否已设置开机自启（以注册表实际读到的为准） */
   autostart: boolean;
+  /** 设置值：希望以什么权限运行 */
+  runAsAdmin: boolean;
+  /** 实际值：本进程当前是否已是管理员。与 runAsAdmin 不一致时需重启才能生效 */
+  isAdmin: boolean;
   /** 数据是否落在 exe 同目录（true = 真便携） */
   portable: boolean;
   /** 实际生效的数据目录 */
   dataDir: string;
+  /** SQLite 数据文件路径 */
+  dbPath: string;
+  /** 已记录的置顶事件条数 */
+  pinEventCount: number;
   /** 版本号 */
   version: string;
 }

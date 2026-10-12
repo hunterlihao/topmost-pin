@@ -29,6 +29,18 @@ export const getSnapshot = () => invoke<Snapshot>("get_snapshot");
 export const setAutostart = (enabled: boolean) =>
   invoke<boolean>("set_autostart", { enabled });
 
+/**
+ * 设置「是否以管理员运行」。
+ *
+ * 进程令牌无法在运行时更改，所以权限与当前不一致时这个命令会**重启应用**，
+ * 调用后当前进程随即退出 —— 前端不必等待它的返回。
+ */
+export const setRunAsAdmin = (enabled: boolean) =>
+  invoke<boolean>("set_run_as_admin", { enabled });
+
+/** 启动动画播完后调用，关闭动画窗并放出主窗口 */
+export const finishSplash = () => invoke<void>("finish_splash");
+
 export const openDataDir = () => invoke<void>("open_data_dir");
 export const hideToTray = () => invoke<void>("hide_to_tray");
 export const quitApp = () => invoke<void>("quit_app");

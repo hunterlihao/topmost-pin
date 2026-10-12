@@ -17,24 +17,33 @@ tauri-build = { version = "2", features = [] }
 # 只启用 tray-icon。切勿启用 image-png / image-ico：它们依赖 `image` crate，
 # 而该 crate 不在本机离线缓存中。托盘图标改用 app.default_window_icon()。
 tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-single-instance = "2"
+
+# 刻意**不用** tauri-plugin-single-instance：它的互斥体在 Builder 阶段就会把第二个实例
+# 顶掉，而「切换管理员权限」需要在运行时重启进程 —— 旧实例尚未退出时，新实例会被误判为
+# 重复启动而自杀。改为自实现（见 src/single_instance.rs），既解决竞态，也顺带甩掉
+# 它依赖链上 Linux 专用的 zbus / async-broadcast（那两个不在离线缓存里）。
 
 # 开机自启刻意不用 tauri-plugin-autostart：它依赖 auto-launch -> async-broadcast，
-# 而 async-broadcast 0.7.2 不在本机离线缓存中，离线解析会直接失败。
-# 改用 winreg 直接写 HKCU\Software\Microsoft\Windows\CurrentVersion\Run —— 十几行代码，零新增风险。
+# 而 async-broadcast 不在本机离线缓存中，离线解析会直接失败。
+# 改用 winreg 直接写 HKCU\Software\Microsoft\Windows\CurrentVersion\Run。
 winreg = "0.55"
+
+# SQLite 数据层。bundled 会把 sqlite3.c 一起编译进来，不依赖系统库，
+# 与「便携、零外部依赖」的定位一致。本机 VS2022 提供 MSVC，可离线编译。
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Win32 直调。本机 cargo 无法联网，只能用已缓存且已在既有项目 Cargo.lock 中解析过的版本。
 #
 # ★ 必须写成内联表：若写成 [dependencies.windows-sys] 子表，TOML 会把后续所有
 #   依赖项都归入该子表，serde / dirs 等将不再生效（这个坑已经踩过一次）。
-#
-# ★ 全局热键不走 tauri-plugin-global-shortcut（未缓存），直接调 RegisterHotKey；
-#   它和 MOD_* 常量都在 Win32::UI::Input::KeyboardAndMouse，不在 WindowsAndMessaging。
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
+    # ShellExecuteW（提权/降权重启）、IsUserAnAdmin
+    "Win32_UI_Shell",
+    # GetTokenInformation + TOKEN_ELEVATION（判断当前是否管理员）
+    "Win32_Security",
     "Win32_System_Threading",
     "Win32_System_ProcessStatus",
     "Win32_System_LibraryLoader",
@@ -66,3 +75,18 @@ lto = "thin"
 codegen-units = 16
 opt-level = "s"
 strip = true
+
+# ★ bundled 的 sqlite3.c 必须关掉调试信息。
+#
+# 原因：dev / test profile 默认 debug = true，cc-rs 会据此给 C 编译器加 `-Z7`，
+# 而 sqlite3.c 有 8MB 之巨，本机 MSVC 直接失败：
+#     cl : Command line error D8050 : cannot execute 'c1.dll':
+#          failed to get command line into debug records
+# release profile 本来就没有调试信息，所以只有 dev 会踩到 —— 这个坑很隐蔽：
+# `cargo build --release` 一路正常，`cargo test` 却编不过。
+# C 代码也不需要 Rust 侧的调试信息，关掉即可。
+[profile.dev.package.libsqlite3-sys]
+debug = false
+
+[profile.test.package.libsqlite3-sys]
+debug = false

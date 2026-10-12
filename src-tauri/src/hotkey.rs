@@ -107,9 +107,23 @@ fn run(app: AppHandle, handle: Arc<HotkeyHandle>) {
     log::write("hotkey", format!("线程启动 tid={tid}"));
 
     unsafe {
-        // hwnd = NULL：注册到本线程。逐个候选尝试，取第一个成功的。
+        // hwnd = NULL：注册到本线程。
+        //
+        // 候选顺序会被「上次实际生效的那个」顶到最前 —— 否则机器上装了别的软件时，
+        // 可用组合一变，热键就会莫名其妙换掉，用户的肌肉记忆直接失效。
+        let preferred = app
+            .try_state::<AppState>()
+            .and_then(|s| s.db.get_setting(crate::db::keys::HOTKEY));
+        let mut order: Vec<&(&str, u32, u32)> = CANDIDATES.iter().collect();
+        if let Some(p) = preferred.as_deref() {
+            order.sort_by_key(|(label, _, _)| usize::from(*label != p));
+        }
+        if let Some(p) = preferred.as_deref() {
+            log::write("hotkey", format!("上次生效的热键是 {p}，优先尝试它"));
+        }
+
         let mut chosen: Option<&str> = None;
-        for (label, mods, vk) in CANDIDATES {
+        for (label, mods, vk) in order {
             let ok = RegisterHotKey(
                 std::ptr::null_mut(),
                 HOTKEY_ID,
@@ -129,7 +143,13 @@ fn run(app: AppHandle, handle: Arc<HotkeyHandle>) {
         handle.active.store(chosen.is_some(), Ordering::SeqCst);
         *handle.display.lock() = chosen.unwrap_or(FALLBACK_HOTKEY).to_string();
         match chosen {
-            Some(label) => log::write("hotkey", format!("注册成功：{label}")),
+            Some(label) => {
+                log::write("hotkey", format!("注册成功：{label}"));
+                // 落库，下次启动优先复用
+                if let Some(state) = app.try_state::<AppState>() {
+                    let _ = state.db.set_setting(crate::db::keys::HOTKEY, label);
+                }
+            }
             None => log::write("hotkey", "全部候选都被占用，热键不可用"),
         }
 
@@ -207,7 +227,7 @@ fn on_hotkey(app: &AppHandle) {
             winapi::process_name(pid),
         ),
     );
-    match state.pins.toggle(hwnd, &title) {
+    match state.toggle_pin(hwnd, &title) {
         Ok(pinned) => {
             log::write(
                 "pin",

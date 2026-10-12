@@ -53,6 +53,21 @@
 | 双击托盘图标 | 重新打开界面 |
 | 托盘右键 → 退出 | 真正退出，并自动取消全部置顶 |
 
+## 启动动画
+
+启动时先弹一个无边框小窗：图钉从上方落下、钉穿那条**水面线**（主界面里分隔
+「已置顶」与其余窗口的同一条线），随后浮现应用名与一条进度线。约 1.1 秒。
+
+几处不那么显然的处理：
+
+- **动画窗必须第一个创建。** 主窗口的 WebView2 初始化是同步的，实测要 1.6～2 秒；
+  先建主窗口的话这段时间屏幕是空的，动画等于白做。
+- **主窗口以 `visible(false)` 创建**，动画跑完才显示，避免动画期间后面闪出主界面。
+- **前端负责时长**（要尊重 `prefers-reduced-motion`），Rust 只做 5 秒兜底 ——
+  万一动画页因为任何原因没跑起来，也必须把主窗口放出来，否则用户看到的是
+  「程序启动了但什么都没有」。
+- 动画窗与主窗口**必须共用同一个 WebView2 数据目录**（见踩坑记录第 8 条）。
+
 **热键是一组候选，不是一个固定值。** 依次尝试 `Ctrl+Alt+P` → `Ctrl+Shift+P` →
 `Ctrl+Alt+T` → `Ctrl+Alt+A` → `Ctrl+Alt+W` → `Ctrl+Alt+K`，用第一个能注册成功的，
 并把**实际生效的那个**显示在界面报头和设置页。全部被占用时，键帽会变成虚线，
@@ -61,6 +76,53 @@
 这样做的原因很实际：本机 `Ctrl+Alt+P` 已被其它程序注册
 （`RegisterHotKey` 返回 1409 `ERROR_HOTKEY_ALREADY_REGISTERED`），
 写死单一组合在装了同类工具的机器上会直接失效。
+
+---
+
+## 管理员权限
+
+设置页有一个「以管理员身份运行」开关。它解决的是一个真实的限制：
+
+> **非提权进程无法置顶提权进程的窗口。** 这是 Windows 的完整性级别限制（UIPI），
+> 任务管理器、部分安装程序都属于这一类。`SetWindowPos` 会返回
+> `ERROR_ACCESS_DENIED(5)`。
+
+进程令牌在启动后就固定了，**无法在运行中提权或降权**，所以这个开关只能靠重启进程落实：
+
+| 方向 | 做法 |
+|---|---|
+| 提权 | `ShellExecuteW(..., "runas", ...)` —— 系统弹 UAC，用户同意后以高完整性令牌启动 |
+| 降权 | **没有对应 API**。让 `explorer.exe` 去启动它 —— explorer 运行在中完整性级别，其子进程自然也是 |
+
+重启的握手靠 `data\.relaunching` 标记文件，而不是命令行参数 —— 经 explorer 启动时
+无法可靠传参，环境变量跨提权边界也不保证保留。
+
+**为什么为此换掉了 `tauri-plugin-single-instance`：** 该插件的互斥体在 `Builder` 阶段
+创建，重启时旧实例还没退出，新实例一启动就被判定为「重复启动」、唤醒旧窗口后自己退出。
+用户看到的现象是*切换开关后程序一闪即没*。改为自实现（`src/single_instance.rs`）后，
+重启中的实例会**等待旧实例释放互斥体**再继续；顺带还甩掉了插件依赖链上 Linux 专用的
+`zbus` / `async-broadcast`（那两个不在离线缓存里）。
+
+---
+
+## 数据与持久化
+
+数据落在便携目录下的 **`data\data.db`**（SQLite 单文件）：
+
+| 表 | 内容 |
+|---|---|
+| `settings` | 键值设置：`run_as_admin`、`hotkey`（上次实际生效的热键，下次优先复用）、`last_switch_at`（权限切换防抖） |
+| `pin_events` | 置顶事件历史：句柄、标题、进程名、动作、时间 |
+
+为什么是 SQLite 而不是 JSON：置顶事件天然是「追加 + 按时间倒查」的形态，用 JSON
+需要每次全量读写，写一半崩溃还会损坏文件。SQLite 事务安全，且 `bundled` feature
+会把 sqlite3 一起编译进来，不依赖系统库 —— 与「便携、零外部依赖」一致。
+
+**热键因此变得稳定**：注册成功的组合会落库，下次启动优先尝试它。否则机器上装了别的
+软件（或那个软件被卸载）时，可用组合一变，热键就会莫名其妙换掉，用户的肌肉记忆直接失效。
+
+`data\topmost-pin.log` 是另一个东西 —— 诊断日志，不是数据。GUI 子系统程序没有控制台，
+`println!` 与 panic 信息都无处可去，出问题时只能盲猜，所以关键事件都写进这个文件。
 
 已置顶的窗口在列表里**整行反相**（实心墨底），并排在列表最上方；与其余窗口之间以一条
 2px 粗墨线分隔 —— 这条线就是「水面线」，之上是被抬起的窗口。
@@ -138,8 +200,9 @@ cargo test --offline --features custom-protocol -- --ignored       # +6 项真�
 | 脚本 | 作用 | 实测结果 |
 |---|---|---|
 | `scripts/winprobe.ps1` | P/Invoke 直读 `WS_EX_TOPMOST`，给验收提供不依赖本程序自报的判据 | 可用 |
-| `scripts/smoke-test.ps1` | 启动产物：GUI 子系统（无控制台黑窗）、主窗口创建、便携数据目录、WebView2 缓存、单实例、**截图验证界面真的渲染了**（不是白屏） | 11/11 通过 |
+| `scripts/smoke-test.ps1` | 启动产物：GUI 子系统（无控制台黑窗）、**启动动画确实出现并被截下**、主窗口创建、便携数据目录、WebView2 缓存、**SQLite 数据文件合法**、单实例、**截图验证界面真的渲染了**（不是白屏） | 15/15 通过（连跑三次稳定） |
 | `scripts/acceptance-test.ps1` | 真实投递 `WM_HOTKEY`（等价按键）后用独立探针断言目标窗口已置顶 | 见下方说明 |
+| `scripts/diag-single-instance.ps1` | 干净环境下单独确认单实例 / 提权重启行为 | 诊断用 |
 
 ### 关于端到端验收：一个环境限制
 
@@ -188,6 +251,46 @@ cargo test --offline --features custom-protocol -- --ignored       # +6 项真�
 6. **release profile 不能用 `codegen-units = 1` + `lto = "fat"`**
    本机带实时防病毒扫描，rustc 写入后立即删除 40MB+ 目标文件时会被占用，报 `os error 32`。
    已改用 `lto = "thin"` + `codegen-units = 16`。
+
+7. **bundled 的 `sqlite3.c` 在 dev / test profile 编不过**
+   ```
+   cl : Command line error D8050 : cannot execute 'c1.dll':
+        failed to get command line into debug records
+   ```
+   dev / test profile 默认 `debug = true`，cc-rs 会据此给 C 编译器加 `-Z7`，而
+   sqlite3.c 有 8MB 之巨，MSVC 塞不下。**这个坑特别隐蔽：`cargo build --release`
+   一路正常，`cargo test` 却编不过。** 解法是给这个包单独关掉调试信息
+   （见 `Cargo.toml` 的 `[profile.dev.package.libsqlite3-sys]`）。
+
+8. **WebView2 在一个进程里只能用一个用户数据目录**
+   启动动画是第二个 WebView 窗口，漏了 `.data_directory()` 就会直接创建失败，
+   报错是「拒绝访问 (os error 5)」—— **完全看不出和缓存目录有关**。
+   两个窗口必须传同一个目录。
+
+9. **`Add-Type` 编译 C# 时默认不引用 `System.Drawing.Common`**
+   在 C# 里写 `System.Drawing.Bitmap` 会 `CS1069`。位图那部分得放回 PowerShell 做
+   （那里 `Add-Type -AssemblyName System.Drawing` 已加载该程序集）。
+
+10. **debug 产物会带控制台窗口**
+    `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` —— 控制台只在
+    release 里被抑制（debug 要留着看 panic 与日志）。发布前务必确认交付的是 release
+    产物，否则用户会看到一个黑窗。冒烟测试有两项专门盯这件事：
+    PE 子系统必须是 `2 (Windows GUI)`，且进程不得创建 `ConsoleWindowClass` 窗口。
+
+11. **冒烟测试必须先清 `data.db`，否则会被「自我提权重启」骗到**
+    如果上次运行把「以管理员身份运行」设成了开，应用一启动就会自我提权重启
+    （`ShellExecute runas` → 本进程退出 → 新实例接管）。而测试脚本跟踪的是最初
+    那个 pid，于是得到一串看起来像产品故障的**假失败**：
+
+    | 现象 | 真实原因 |
+    |---|---|
+    | 「进程存活」失败 | 第一个进程按设计退出了，把位置让给提权实例 |
+    | 「第二次启动不产生第二个进程」变成 1→2 | 提权实例正在替换旧进程 |
+    | 主窗口矩形 `0x0` | 抓到的句柄属于已销毁的启动动画窗/旧实例 |
+
+    这个假象排查了很久，因为**它看起来完全是产品缺陷**。现在冒烟测试在启动前会清掉
+    `data.db*`，保证每次都是干净状态。`scripts/diag-single-instance.ps1` 是当时用来
+    在干净环境里单独确认单实例/提权行为的诊断脚本，保留下来备用。
 
 ---
 

@@ -1,3 +1,5 @@
+import { fileURLToPath, URL } from "node:url";
+
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
@@ -24,5 +26,14 @@ export default defineConfig({
     minify: "esbuild",
     sourcemap: false,
     chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      input: {
+        // 主界面
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        // 启动动画单独入口：只为一段动画没必要把整个主界面应用加载起来，
+        // 而且动画窗在主窗口之前就要出现，越轻越好。
+        splash: fileURLToPath(new URL("./splash.html", import.meta.url)),
+      },
+    },
   },
 });

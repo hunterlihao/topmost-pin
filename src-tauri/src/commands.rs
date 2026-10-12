@@ -1,9 +1,11 @@
 //! Tauri 命令层：前端唯一能调到的入口。每个命令都只做转发与数据整形，
-//! 业务规则在 pin.rs / winapi.rs 里。
+//! 业务规则在 pin.rs / db.rs / elevation.rs 里。
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use crate::db;
+use crate::elevation;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::winapi;
@@ -48,14 +50,14 @@ pub fn toggle_pin(state: State<'_, AppState>, hwnd: isize) -> AppResult<bool> {
     }
     let title = winapi::title_of(hwnd);
     crate::log::write("cmd", format!("toggle_pin（来自界面）hwnd=0x{hwnd:X} title=「{title}」"));
-    state.pins.toggle(hwnd, &title)
+    state.toggle_pin(hwnd, &title)
 }
 
 /// 取消全部置顶，返回取消的数量
 #[tauri::command]
 pub fn unpin_all(state: State<'_, AppState>) -> usize {
     crate::log::write("cmd", "unpin_all（来自界面）");
-    state.pins.unpin_all()
+    state.unpin_all()
 }
 
 #[derive(Serialize)]
@@ -65,9 +67,17 @@ pub struct Snapshot {
     pub hotkey: String,
     pub hotkey_active: bool,
     pub autostart: bool,
+    /// 设置值：是否希望以管理员运行
+    pub run_as_admin: bool,
+    /// 实际值：本进程当前是否已经是管理员。与设置不一致时界面要提示重启
+    pub is_admin: bool,
     /// true = 数据在 exe 同目录（真便携）
     pub portable: bool,
     pub data_dir: String,
+    /// SQLite 数据文件路径
+    pub db_path: String,
+    /// 已记录的置顶事件条数
+    pub pin_event_count: i64,
     pub version: String,
 }
 
@@ -78,8 +88,12 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot {
         hotkey: state.hotkey_display(),
         hotkey_active: state.hotkey_active(),
         autostart: crate::autostart::is_enabled(),
+        run_as_admin: state.run_as_admin(),
+        is_admin: state.is_admin,
         portable: state.paths.portable,
         data_dir: state.paths.data_dir.display().to_string(),
+        db_path: state.db.path().display().to_string(),
+        pin_event_count: state.db.pin_event_count(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
@@ -89,6 +103,51 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot {
 pub fn set_autostart(enabled: bool) -> AppResult<bool> {
     crate::autostart::set(enabled)?;
     Ok(crate::autostart::is_enabled())
+}
+
+/// 切换「是否以管理员运行」。
+///
+/// 进程令牌在运行时无法更改，所以这个开关必须靠**重启进程**落实：
+/// 先把设置写进数据库，再以目标权限启动新实例，然后本进程退出。
+/// 新实例启动时会读到新设置，发现权限已经匹配，就不会再重启（不会来回循环）。
+#[tauri::command]
+pub fn set_run_as_admin(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> AppResult<bool> {
+    state.db.set_bool(db::keys::RUN_AS_ADMIN, enabled)?;
+    crate::log::write("cmd", format!("set_run_as_admin({enabled})"));
+
+    if state.is_admin == enabled {
+        // 当前权限已经就是目标权限，无需重启
+        return Ok(enabled);
+    }
+
+    let marker = elevation::marker_path(&state.paths.data_dir);
+    let _ = std::fs::write(&marker, if enabled { "admin" } else { "user" });
+    let _ = state.db.set_i64(db::keys::LAST_SWITCH_AT, db::now_ms());
+
+    match elevation::relaunch(enabled) {
+        Ok(()) => {
+            crate::log::write("cmd", "已发起权限切换重启，本进程退出");
+            app.exit(0);
+            Ok(enabled)
+        }
+        Err(e) => {
+            // 重启没发起成功（典型：用户取消了 UAC），把标记清掉，
+            // 否则下次启动会误以为「自己是一次重启的结果」
+            let _ = std::fs::remove_file(&marker);
+            crate::log::write("cmd", format!("权限切换失败：{e}"));
+            Err(e)
+        }
+    }
+}
+
+/// 启动动画页跑完后调用：关掉动画窗、放出主窗口
+#[tauri::command]
+pub fn finish_splash(app: AppHandle) {
+    crate::splash::finish(&app);
 }
 
 #[tauri::command]

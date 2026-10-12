@@ -28,6 +28,18 @@ use crate::error::AppError;
 /// 跨线程安全的窗口句柄表示
 pub type HwndRaw = isize;
 
+/// 把 Rust 字符串转成 Win32 需要的 UTF-16 宽字符（带结尾 NUL）
+pub fn to_wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// 把路径转成 UTF-16。走 OsStr 而不是 to_string_lossy，
+/// 避免非 UTF-8 路径被替换字符污染后打不开。
+pub fn path_to_wide(p: &std::path::Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+}
+
 #[inline]
 fn to_hwnd(h: HwndRaw) -> HWND {
     h as HWND
