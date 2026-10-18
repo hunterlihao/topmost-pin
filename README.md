@@ -9,6 +9,8 @@
 
 [MIT 许可证](LICENSE) · Windows 10/11 64 位 · Tauri v2 + Rust + Vue 3
 
+> 25 秒宣传片：[1920×1080](docs/promo/TopMostPin-promo.mp4)　·　[分镜总览](docs/promo/分镜总览.png)（界面画面全部来自真实运行中的应用窗口，不是重绘；抓图与合成脚本在 `scripts/`）
+
 ---
 
 ## 下载

@@ -33,3 +33,7 @@ artifacts/
 .DS_Store
 Thumbs.db
 *.log
+
+# Python（宣传片脚本）
+__pycache__/
+*.pyc
